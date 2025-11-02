@@ -233,3 +233,83 @@ test "parse pipeline with dependencies" {
     try testing.expectEqual(@as(usize, 1), pipe.steps[1].depends_on.len);
     try testing.expectEqualStrings("checkout", pipe.steps[1].depends_on[0]);
 }
+
+test "parse pipeline with environment variables" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const json =
+        \\{
+        \\  "name": "env-test",
+        \\  "description": "Test env vars",
+        \\  "steps": [
+        \\    {
+        \\      "id": "test",
+        \\      "name": "Test",
+        \\      "action": {
+        \\        "type": "shell",
+        \\        "command": "echo $VAR1"
+        \\      },
+        \\      "env": {
+        \\        "VAR1": "value1",
+        \\        "VAR2": "value2"
+        \\      }
+        \\    }
+        \\  ]
+        \\}
+    ;
+
+    const pipe = try parseDefinition(allocator, json);
+    defer pipe.deinit(allocator);
+
+    try testing.expectEqual(@as(usize, 1), pipe.steps.len);
+    try testing.expectEqual(@as(usize, 2), pipe.steps[0].env.count());
+    try testing.expectEqualStrings("value1", pipe.steps[0].env.get("VAR1").?);
+    try testing.expectEqualStrings("value2", pipe.steps[0].env.get("VAR2").?);
+}
+
+test "parse all action types" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    // Test compile action
+    const compile_json =
+        \\{
+        \\  "name": "test",
+        \\  "description": "test",
+        \\  "steps": [{
+        \\    "id": "compile",
+        \\    "name": "Compile",
+        \\    "action": {
+        \\      "type": "compile",
+        \\      "source_file": "main.zig",
+        \\      "output_name": "app",
+        \\      "optimize": "ReleaseFast"
+        \\    }
+        \\  }]
+        \\}
+    ;
+    const pipe1 = try parseDefinition(allocator, compile_json);
+    defer pipe1.deinit(allocator);
+    try testing.expect(pipe1.steps[0].action == .compile);
+
+    // Test artifact action
+    const artifact_json =
+        \\{
+        \\  "name": "test",
+        \\  "description": "test",
+        \\  "steps": [{
+        \\    "id": "artifact",
+        \\    "name": "Artifact",
+        \\    "action": {
+        \\      "type": "artifact",
+        \\      "source_path": "app",
+        \\      "destination": "dist/app"
+        \\    }
+        \\  }]
+        \\}
+    ;
+    const pipe2 = try parseDefinition(allocator, artifact_json);
+    defer pipe2.deinit(allocator);
+    try testing.expect(pipe2.steps[0].action == .artifact);
+}

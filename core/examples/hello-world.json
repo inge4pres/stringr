@@ -1,0 +1,26 @@
+{
+  "name": "hello-world-pipeline",
+  "description": "A minimal test pipeline",
+  "steps": [
+    {
+      "id": "hello",
+      "name": "Say Hello",
+      "action": {
+        "type": "shell",
+        "command": "echo 'Hello from Better-CI!'"
+      }
+    },
+    {
+      "id": "info",
+      "name": "Show System Info",
+      "depends_on": ["hello"],
+      "action": {
+        "type": "shell",
+        "command": "uname -a && zig version"
+      },
+      "env": {
+        "CUSTOM_VAR": "test-value"
+      }
+    }
+  ]
+}

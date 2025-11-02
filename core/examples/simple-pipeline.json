@@ -1,0 +1,47 @@
+{
+  "name": "simple-ci-pipeline",
+  "description": "A simple CI pipeline that builds and tests a Zig project",
+  "steps": [
+    {
+      "id": "checkout",
+      "name": "Checkout Code",
+      "action": {
+        "type": "checkout",
+        "repository": "https://github.com/user/my-project",
+        "branch": "main",
+        "path": "."
+      }
+    },
+    {
+      "id": "build",
+      "name": "Build Project",
+      "depends_on": ["checkout"],
+      "action": {
+        "type": "shell",
+        "command": "zig build"
+      },
+      "env": {
+        "BUILD_MODE": "release"
+      }
+    },
+    {
+      "id": "test",
+      "name": "Run Tests",
+      "depends_on": ["build"],
+      "action": {
+        "type": "test",
+        "test_file": "src/main.zig"
+      }
+    },
+    {
+      "id": "archive",
+      "name": "Archive Artifacts",
+      "depends_on": ["build"],
+      "action": {
+        "type": "artifact",
+        "source_path": "zig-out/bin/my-app",
+        "destination": "artifacts/my-app"
+      }
+    }
+  ]
+}

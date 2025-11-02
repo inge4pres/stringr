@@ -1,5 +1,6 @@
 const std = @import("std");
 const pipeline = @import("pipeline.zig");
+const graph = @import("graph.zig");
 
 /// Generate all files needed for the pipeline executable
 pub fn generate(
@@ -111,13 +112,94 @@ fn generateMainZig(allocator: std.mem.Allocator, pipe: pipeline.Pipeline, output
     try writer.print("{s}", .{pipe.description});
     try writer.writeAll("\\n\\n\", .{});\n\n");
 
-    // Execute steps in order (respecting dependencies)
-    // For now, simple sequential execution
-    // TODO: Implement parallel execution based on dependency graph
-    for (pipe.steps) |step| {
-        try writer.print("    try stdout.print(\"Running step: {s}...\\n\", .{{}});\n", .{step.name});
-        try writer.print("    try step_{s}.execute(allocator, stdout);\n", .{step.id});
-        try writer.print("    try stdout.print(\"✓ Step {s} completed\\n\\n\", .{{}});\n\n", .{step.name});
+    // Compute execution plan for parallel execution
+    const plan = try graph.computeExecutionPlan(allocator, pipe);
+    defer plan.deinit();
+
+    // Check if we need parallel execution support
+    var needs_parallel = false;
+    for (plan.levels) |level| {
+        if (level.len > 1) {
+            needs_parallel = true;
+            break;
+        }
+    }
+
+    // Generate parallel execution code
+    if (needs_parallel) {
+        try writer.writeAll(
+            \\    // Step execution results
+            \\    const StepResult = struct {
+            \\        step_name: []const u8,
+            \\        err: ?anyerror = null,
+            \\    };
+            \\
+            \\
+        );
+    }
+
+    // For each execution level
+    for (plan.levels, 0..) |level, level_idx| {
+        try writer.print("    // Level {d}: {d} step(s) in parallel\n", .{ level_idx, level.len });
+
+        if (level.len == 1) {
+            // Single step - execute directly (no thread overhead)
+            const step_idx = level[0];
+            const step = pipe.steps[step_idx];
+            try writer.print("    try stdout.print(\"Running step: {s}...\\n\", .{{}});\n", .{step.name});
+            try writer.print("    try step_{s}.execute(allocator, stdout);\n", .{step.id});
+            try writer.print("    try stdout.print(\"✓ Step {s} completed\\n\\n\", .{{}});\n\n", .{step.name});
+        } else {
+            // Multiple steps - execute in parallel with threads
+            try writer.print("    {{\n", .{});
+            try writer.print("        var threads = try allocator.alloc(std.Thread, {d});\n", .{level.len});
+            try writer.print("        defer allocator.free(threads);\n", .{});
+            try writer.print("        var results = try allocator.alloc(StepResult, {d});\n", .{level.len});
+            try writer.print("        defer allocator.free(results);\n\n", .{});
+
+            // Define thread function for each step in this level
+            for (level, 0..) |step_idx, i| {
+                const step = pipe.steps[step_idx];
+                try writer.print("        const step{d}_fn = struct {{\n", .{i});
+                try writer.print("            fn run(result: *StepResult) void {{\n", .{});
+                try writer.print("                var thread_gpa = std.heap.GeneralPurposeAllocator(.{{}}){{}};\n", .{});
+                try writer.print("                defer _ = thread_gpa.deinit();\n", .{});
+                try writer.print("                const thread_allocator = thread_gpa.allocator();\n", .{});
+                try writer.print("                // Use a null writer to discard output (avoid thread-safety issues)\n", .{});
+                try writer.print("                const null_writer = std.io.null_writer;\n", .{});
+                try writer.print("                result.step_name = \"{s}\";\n", .{step.name});
+                try writer.print("                step_{s}.execute(thread_allocator, null_writer) catch |err| {{\n", .{step.id});
+                try writer.print("                    result.err = err;\n", .{});
+                try writer.print("                    return;\n", .{});
+                try writer.print("                }};\n", .{});
+                try writer.print("            }}\n", .{});
+                try writer.print("        }}.run;\n\n", .{});
+            }
+
+            // Spawn threads
+            try writer.print("        try stdout.print(\"Running {d} steps in parallel...\\n\", .{{}});\n", .{level.len});
+            for (level, 0..) |_, i| {
+                try writer.print("        threads[{d}] = try std.Thread.spawn(.{{}}, step{d}_fn, .{{&results[{d}]}});\n", .{ i, i, i });
+            }
+
+            // Wait for all threads
+            try writer.print("\n", .{});
+            for (level, 0..) |_, i| {
+                try writer.print("        threads[{d}].join();\n", .{i});
+            }
+
+            // Check results
+            try writer.print("\n        // Check for errors\n", .{});
+            try writer.print("        for (results) |result| {{\n", .{});
+            try writer.print("            if (result.err) |err| {{\n", .{});
+            try writer.print("                try stdout.print(\"✗ Step {{s}} failed: {{s}}\\n\", .{{result.step_name, @errorName(err)}});\n", .{});
+            try writer.print("                return err;\n", .{});
+            try writer.print("            }}\n", .{});
+            try writer.print("            try stdout.print(\"✓ Step {{s}} completed\\n\", .{{result.step_name}});\n", .{});
+            try writer.print("        }}\n", .{});
+            try writer.print("        try stdout.print(\"\\n\", .{{}});\n", .{});
+            try writer.print("    }}\n\n", .{});
+        }
     }
 
     try writer.writeAll(

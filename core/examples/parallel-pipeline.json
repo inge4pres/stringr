@@ -1,0 +1,50 @@
+{
+  "name": "parallel-test-pipeline",
+  "description": "Pipeline demonstrating parallel execution",
+  "steps": [
+    {
+      "id": "setup",
+      "name": "Setup",
+      "action": {
+        "type": "shell",
+        "command": "echo 'Setting up...' && sleep 1"
+      }
+    },
+    {
+      "id": "test_unit",
+      "name": "Unit Tests",
+      "depends_on": ["setup"],
+      "action": {
+        "type": "shell",
+        "command": "echo 'Running unit tests...' && sleep 2 && echo 'Unit tests passed!'"
+      }
+    },
+    {
+      "id": "test_integration",
+      "name": "Integration Tests",
+      "depends_on": ["setup"],
+      "action": {
+        "type": "shell",
+        "command": "echo 'Running integration tests...' && sleep 2 && echo 'Integration tests passed!'"
+      }
+    },
+    {
+      "id": "lint",
+      "name": "Linting",
+      "depends_on": ["setup"],
+      "action": {
+        "type": "shell",
+        "command": "echo 'Running linter...' && sleep 1 && echo 'Linting passed!'"
+      }
+    },
+    {
+      "id": "deploy",
+      "name": "Deploy",
+      "depends_on": ["test_unit", "test_integration", "lint"],
+      "action": {
+        "type": "shell",
+        "command": "echo 'Deploying...' && sleep 1 && echo 'Deployment complete!'"
+      }
+    }
+  ]
+}
