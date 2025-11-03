@@ -8,8 +8,16 @@ pub fn main() !void {
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
-    const stdout = std.fs.File.stdout().deprecatedWriter().any();
-    const stderr = std.fs.File.stderr().deprecatedWriter().any();
+    // Create buffered writers for stdout and stderr
+    var stdout_buffer: [4096]u8 = undefined;
+    var stdout_writer = std.fs.File.stdout().writer(&stdout_buffer);
+    const stdout = &stdout_writer.interface;
+    defer stdout.flush() catch {};
+
+    var stderr_buffer: [4096]u8 = undefined;
+    var stderr_writer = std.fs.File.stderr().writer(&stderr_buffer);
+    const stderr = &stderr_writer.interface;
+    defer stderr.flush() catch {};
 
     // Parse command line arguments
     const args = try std.process.argsAlloc(allocator);
@@ -17,6 +25,7 @@ pub fn main() !void {
 
     if (args.len < 2) {
         try printUsage(stderr);
+        try stderr.flush();
         std.process.exit(1);
     }
 
@@ -26,6 +35,7 @@ pub fn main() !void {
         if (args.len < 3) {
             try stderr.print("Error: generate command requires a pipeline definition file\n", .{});
             try printUsage(stderr);
+            try stderr.flush();
             std.process.exit(1);
         }
 
@@ -33,13 +43,17 @@ pub fn main() !void {
         const output_dir = if (args.len > 3) args[3] else "generated";
 
         try generatePipeline(allocator, definition_file, output_dir, stdout);
+        try stdout.flush();
     } else if (std.mem.eql(u8, command, "help")) {
         try printUsage(stdout);
+        try stdout.flush();
     } else if (std.mem.eql(u8, command, "version")) {
         try stdout.print("better-ci version 0.1.0\n", .{});
+        try stdout.flush();
     } else {
         try stderr.print("Error: unknown command '{s}'\n", .{command});
         try printUsage(stderr);
+        try stderr.flush();
         std.process.exit(1);
     }
 }
@@ -48,7 +62,7 @@ fn generatePipeline(
     allocator: std.mem.Allocator,
     definition_file: []const u8,
     output_dir: []const u8,
-    writer: std.io.AnyWriter,
+    writer: *std.Io.Writer,
 ) !void {
     try writer.print("Generating pipeline from: {s}\n", .{definition_file});
     try writer.print("Output directory: {s}\n", .{output_dir});
@@ -68,7 +82,7 @@ fn generatePipeline(
     try writer.print("  cd {s} && zig build\n", .{output_dir});
 }
 
-fn printUsage(writer: std.io.AnyWriter) !void {
+fn printUsage(writer: *std.Io.Writer) !void {
     try writer.writeAll(
         \\better-ci - A faster, debuggable CI/CD system
         \\

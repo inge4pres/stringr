@@ -7,7 +7,7 @@ pub fn generate(
     allocator: std.mem.Allocator,
     pipe: pipeline.Pipeline,
     output_dir: []const u8,
-    writer: std.io.AnyWriter,
+    writer: *std.Io.Writer,
 ) !void {
     // Create output directory
     try std.fs.cwd().makePath(output_dir);
@@ -37,7 +37,10 @@ fn generateBuildZig(allocator: std.mem.Allocator, pipe: pipeline.Pipeline, outpu
     const file = try std.fs.cwd().createFile(build_path, .{});
     defer file.close();
 
-    const writer = file.deprecatedWriter().any();
+    var file_buffer: [4096]u8 = undefined;
+    var file_writer = file.writer(&file_buffer);
+    const writer = &file_writer.interface;
+    defer writer.flush() catch {};
 
     try writer.writeAll(
         \\const std = @import("std");
@@ -84,7 +87,10 @@ fn generateMainZig(allocator: std.mem.Allocator, pipe: pipeline.Pipeline, output
     const file = try std.fs.cwd().createFile(main_path, .{});
     defer file.close();
 
-    const writer = file.deprecatedWriter().any();
+    var file_buffer: [4096]u8 = undefined;
+    var file_writer = file.writer(&file_buffer);
+    const writer = &file_writer.interface;
+    defer writer.flush() catch {};
 
     // Write imports
     try writer.writeAll("const std = @import(\"std\");\n");
@@ -100,7 +106,10 @@ fn generateMainZig(allocator: std.mem.Allocator, pipe: pipeline.Pipeline, output
         \\    defer _ = gpa.deinit();
         \\    const allocator = gpa.allocator();
         \\
-        \\    const stdout = std.fs.File.stdout().deprecatedWriter().any();
+        \\    var stdout_buffer: [4096]u8 = undefined;
+        \\    var stdout_writer = std.fs.File.stdout().writer(&stdout_buffer);
+        \\    const stdout = &stdout_writer.interface;
+        \\    defer stdout.flush() catch {};
         \\
         \\    try stdout.print("=== Pipeline:
     );
@@ -167,8 +176,10 @@ fn generateMainZig(allocator: std.mem.Allocator, pipe: pipeline.Pipeline, output
                 try writer.print("                var thread_gpa = std.heap.GeneralPurposeAllocator(.{{}}){{}};\n", .{});
                 try writer.print("                defer _ = thread_gpa.deinit();\n", .{});
                 try writer.print("                const thread_allocator = thread_gpa.allocator();\n", .{});
-                try writer.print("                // Use a null writer to discard output (avoid thread-safety issues)\n", .{});
-                try writer.print("                const null_writer = std.io.null_writer.any();\n", .{});
+                try writer.print("                // Use a discarding writer to discard output (avoid thread-safety issues)\n", .{});
+                try writer.print("                var null_buffer: [4096]u8 = undefined;\n", .{});
+                try writer.print("                var discarding = std.Io.Writer.Discarding.init(&null_buffer);\n", .{});
+                try writer.print("                const null_writer = &discarding.writer;\n", .{});
                 try writer.print("                result.step_name = \"{s}\";\n", .{step.name});
                 try writer.print("                step_{s}.execute(thread_allocator, null_writer) catch |err| {{\n", .{step.id});
                 try writer.print("                    result.err = err;\n", .{});
@@ -224,13 +235,18 @@ fn generateStepFiles(allocator: std.mem.Allocator, pipe: pipeline.Pipeline, outp
         const file = try std.fs.cwd().createFile(step_path, .{});
         defer file.close();
 
-        try generateStepImplementation(file.deprecatedWriter().any(), step);
+        var file_buffer: [4096]u8 = undefined;
+        var file_writer = file.writer(&file_buffer);
+        const writer = &file_writer.interface;
+        defer writer.flush() catch {};
+
+        try generateStepImplementation(writer, step);
     }
 }
 
-fn generateStepImplementation(writer: std.io.AnyWriter, step: pipeline.Step) !void {
+fn generateStepImplementation(writer: *std.Io.Writer, step: pipeline.Step) !void {
     try writer.writeAll("const std = @import(\"std\");\n\n");
-    try writer.writeAll("pub fn execute(allocator: std.mem.Allocator, stdout: std.io.AnyWriter) !void {\n");
+    try writer.writeAll("pub fn execute(allocator: std.mem.Allocator, stdout: *std.Io.Writer) !void {\n");
 
     // Create environment map if there are env vars
     if (step.env.count() > 0) {
