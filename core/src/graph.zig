@@ -14,6 +14,14 @@ pub const ExecutionPlan = struct {
     }
 };
 
+/// Errors related to processing the build graph.
+pub const GraphError = error{
+    // A step has a dependency on a non-existent step
+    InvalidDependency,
+    // There is a circular dependency in the steps
+    CircularDependency,
+};
+
 /// Compute execution levels from pipeline dependencies
 /// Returns an error if there are circular dependencies
 pub fn computeExecutionPlan(allocator: std.mem.Allocator, pipe: pipeline.Pipeline) !ExecutionPlan {
@@ -38,7 +46,7 @@ pub fn computeExecutionPlan(allocator: std.mem.Allocator, pipe: pipeline.Pipelin
                 in_degree[i] += 1;
             } else {
                 // Dependency not found - invalid pipeline
-                return error.InvalidDependency;
+                return GraphError.InvalidDependency;
             }
         }
     }
@@ -74,7 +82,7 @@ pub fn computeExecutionPlan(allocator: std.mem.Allocator, pipe: pipeline.Pipelin
         if (current_level.items.len == 0) {
             // No steps can be processed - circular dependency
             current_level.deinit();
-            return error.CircularDependency;
+            return GraphError.CircularDependency;
         }
 
         // Mark these steps as processed and reduce in_degree of dependents
@@ -108,7 +116,6 @@ test "compute execution plan - simple linear" {
     const allocator = testing.allocator;
 
     var steps = try allocator.alloc(pipeline.Step, 2);
-    defer allocator.free(steps);
 
     var env1 = std.StringHashMap([]const u8).init(allocator);
     defer env1.deinit();
@@ -157,7 +164,6 @@ test "compute execution plan - parallel steps" {
     const allocator = testing.allocator;
 
     var steps = try allocator.alloc(pipeline.Step, 3);
-    defer allocator.free(steps);
 
     var env1 = std.StringHashMap([]const u8).init(allocator);
     defer env1.deinit();
@@ -214,4 +220,111 @@ test "compute execution plan - parallel steps" {
     try testing.expectEqual(@as(usize, 2), plan.levels.len);
     try testing.expectEqual(@as(usize, 1), plan.levels[0].len); // step1
     try testing.expectEqual(@as(usize, 2), plan.levels[1].len); // step2 and step3 in parallel
+}
+
+test "compute execution plan - missing dependency error" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var steps = try allocator.alloc(pipeline.Step, 2);
+
+    var env1 = std.StringHashMap([]const u8).init(allocator);
+    defer env1.deinit();
+    var env2 = std.StringHashMap([]const u8).init(allocator);
+    defer env2.deinit();
+
+    // Step 1: no dependencies
+    steps[0] = pipeline.Step{
+        .id = try allocator.dupe(u8, "step1"),
+        .name = try allocator.dupe(u8, "Step 1"),
+        .action = pipeline.Action{ .shell = .{ .command = try allocator.dupe(u8, "echo 1"), .working_dir = null } },
+        .depends_on = &.{},
+        .env = env1,
+    };
+
+    // Step 2: depends on non-existent step
+    const dep = try allocator.dupe(u8, "nonexistent_step");
+    const deps = try allocator.alloc([]const u8, 1);
+    deps[0] = dep;
+
+    steps[1] = pipeline.Step{
+        .id = try allocator.dupe(u8, "step2"),
+        .name = try allocator.dupe(u8, "Step 2"),
+        .action = pipeline.Action{ .shell = .{ .command = try allocator.dupe(u8, "echo 2"), .working_dir = null } },
+        .depends_on = deps,
+        .env = env2,
+    };
+
+    const pipe = pipeline.Pipeline{
+        .name = try allocator.dupe(u8, "test"),
+        .description = try allocator.dupe(u8, "test"),
+        .steps = steps,
+    };
+    defer pipe.deinit(allocator);
+
+    const result = computeExecutionPlan(allocator, pipe);
+    try testing.expectError(GraphError.InvalidDependency, result);
+}
+
+test "compute execution plan - circular dependency error" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var steps = try allocator.alloc(pipeline.Step, 3);
+
+    var env1 = std.StringHashMap([]const u8).init(allocator);
+    defer env1.deinit();
+    var env2 = std.StringHashMap([]const u8).init(allocator);
+    defer env2.deinit();
+    var env3 = std.StringHashMap([]const u8).init(allocator);
+    defer env3.deinit();
+
+    // Step 1: depends on step3 (creates circular dependency)
+    const dep1 = try allocator.dupe(u8, "step3");
+    const deps1 = try allocator.alloc([]const u8, 1);
+    deps1[0] = dep1;
+
+    steps[0] = pipeline.Step{
+        .id = try allocator.dupe(u8, "step1"),
+        .name = try allocator.dupe(u8, "Step 1"),
+        .action = pipeline.Action{ .shell = .{ .command = try allocator.dupe(u8, "echo 1"), .working_dir = null } },
+        .depends_on = deps1,
+        .env = env1,
+    };
+
+    // Step 2: depends on step1
+    const dep2 = try allocator.dupe(u8, "step1");
+    const deps2 = try allocator.alloc([]const u8, 1);
+    deps2[0] = dep2;
+
+    steps[1] = pipeline.Step{
+        .id = try allocator.dupe(u8, "step2"),
+        .name = try allocator.dupe(u8, "Step 2"),
+        .action = pipeline.Action{ .shell = .{ .command = try allocator.dupe(u8, "echo 2"), .working_dir = null } },
+        .depends_on = deps2,
+        .env = env2,
+    };
+
+    // Step 3: depends on step2 (completes the circular dependency: step1 -> step3 -> step2 -> step1)
+    const dep3 = try allocator.dupe(u8, "step2");
+    const deps3 = try allocator.alloc([]const u8, 1);
+    deps3[0] = dep3;
+
+    steps[2] = pipeline.Step{
+        .id = try allocator.dupe(u8, "step3"),
+        .name = try allocator.dupe(u8, "Step 3"),
+        .action = pipeline.Action{ .shell = .{ .command = try allocator.dupe(u8, "echo 3"), .working_dir = null } },
+        .depends_on = deps3,
+        .env = env3,
+    };
+
+    const pipe = pipeline.Pipeline{
+        .name = try allocator.dupe(u8, "test"),
+        .description = try allocator.dupe(u8, "test"),
+        .steps = steps,
+    };
+    defer pipe.deinit(allocator);
+
+    const result = computeExecutionPlan(allocator, pipe);
+    try testing.expectError(GraphError.CircularDependency, result);
 }

@@ -101,7 +101,11 @@ fn printUsage(writer: *std.Io.Writer) !void {
     );
 }
 
-test "basic functionality" {
-    const testing = std.testing;
-    try testing.expect(true);
+// Tests
+test {
+    _ = @import("codegen.zig");
+    _ = @import("graph.zig");
+    _ = @import("parser.zig");
+    _ = @import("pipeline.zig");
+    _ = @import("templates.zig");
 }

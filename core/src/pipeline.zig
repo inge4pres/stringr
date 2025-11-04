@@ -155,7 +155,6 @@ test "pipeline creation" {
     const allocator = testing.allocator;
 
     var steps = try allocator.alloc(Step, 1);
-    defer allocator.free(steps);
 
     var env = std.StringHashMap([]const u8).init(allocator);
     defer env.deinit();

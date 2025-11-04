@@ -311,7 +311,6 @@ test "generate basic pipeline" {
     const allocator = testing.allocator;
 
     var steps = try allocator.alloc(pipeline.Step, 1);
-    defer allocator.free(steps);
 
     var env = std.StringHashMap([]const u8).init(allocator);
     defer env.deinit();
@@ -336,7 +335,8 @@ test "generate basic pipeline" {
     };
     defer pipe.deinit(allocator);
 
-    var output = std.ArrayList(u8).init(allocator);
+    const ArrayList = std.array_list.AlignedManaged(u8, null);
+    var output = ArrayList.init(allocator);
     defer output.deinit();
 
     // This would generate files, skip in test
