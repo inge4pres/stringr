@@ -99,112 +99,91 @@ fn generateMainZig(allocator: std.mem.Allocator, pipe: pipeline.Pipeline, output
     for (plan.levels, 0..) |level, level_idx| {
         try writer.print("    // Level {d}: {d} step(s) in parallel\n", .{ level_idx, level.len });
 
-        if (level.len == 1) {
-            // Single step - execute directly (no thread overhead)
-            const step_idx = level[0];
+        try writer.print("    {{\n", .{});
+        try writer.print(
+            \\        var threads = try allocator.alloc(std.Thread, {d});
+            \\        defer allocator.free(threads);
+            \\        var results = try allocator.alloc(StepResult, {d});
+            \\        defer allocator.free(results);
+            \\        @memset(results, .{{ .step_name = "", .error_name = null, .err = null }});
+            \\        var log_paths = try allocator.alloc([]const u8, {d});
+            \\        defer allocator.free(log_paths);
+            \\
+            \\
+        , .{ level.len, level.len, level.len });
+
+        // Create log paths for each step
+        for (level, 0..) |step_idx, i| {
             const step = pipe.steps[step_idx];
-            try writer.print(templates.single_step_execution, .{
-                step.name, // "Running step: {s}..."
-                step.id,   // log_path_{s}
-                step.id,   // step_{s}.log
-                step.id,   // defer allocator.free(log_path_{s})
-                step.id,   // step_{s}.execute
-                step.id,   // log_path_{s} in execute
-                step.id,   // log_content_{s}
-                step.id,   // log_path_{s} in readFileAlloc
-                step.id,   // defer allocator.free(log_content_{s})
-                step.id,   // if (log_content_{s}.len > 0)
-                step.id,   // log_content_{s} in print arguments
-                step.name, // "✓ Step {s} completed"
-            });
-        } else {
-            // Multiple steps - execute in parallel with threads
-            try writer.print("    {{\n", .{});
-            try writer.print(
-                \\        var threads = try allocator.alloc(std.Thread, {d});
-                \\        defer allocator.free(threads);
-                \\        var results = try allocator.alloc(StepResult, {d});
-                \\        defer allocator.free(results);
-                \\        @memset(results, .{{ .step_name = "", .error_name = null, .err = null }});
-                \\        var log_paths = try allocator.alloc([]const u8, {d});
-                \\        defer allocator.free(log_paths);
-                \\
-                \\
-            , .{level.len, level.len, level.len});
-
-            // Create log paths for each step
-            for (level, 0..) |step_idx, i| {
-                const step = pipe.steps[step_idx];
-                try writer.print("        log_paths[{d}] = try std.fmt.allocPrint(allocator, \"{{s}}/step_{s}.log\", .{{log_dir}});\n", .{ i, step.id });
-            }
-            try writer.print("        defer for (log_paths) |lp| allocator.free(lp);\n\n", .{});
-
-            // Define thread function for each step in this level
-            for (level, 0..) |step_idx, i| {
-                const step = pipe.steps[step_idx];
-                try writer.print(
-                    \\        const step{d}_fn = struct {{
-                    \\            fn run(result: *StepResult, log_path: []const u8) void {{
-                    \\                var thread_gpa = std.heap.GeneralPurposeAllocator(.{{}}){{}};
-                    \\                defer _ = thread_gpa.deinit();
-                    \\                const thread_allocator = thread_gpa.allocator();
-                    \\                result.step_name = "{s}";
-                    \\                step_{s}.execute(thread_allocator, log_path) catch |err| {{
-                    \\                    result.err = err;
-                    \\                    result.error_name = "StepExecutionFailed";
-                    \\                    return;
-                    \\                }};
-                    \\            }}
-                    \\        }}.run;
-                    \\
-                    \\
-                , .{i, step.name, step.id});
-            }
-
-            // Spawn threads
-            try writer.print("        try stdout.print(\"Running {d} steps in parallel...\\n\", .{{}});\n", .{level.len});
-            for (level, 0..) |_, i| {
-                try writer.print("        threads[{d}] = try std.Thread.spawn(.{{}}, step{d}_fn, .{{&results[{d}], log_paths[{d}]}});\n", .{ i, i, i, i });
-            }
-
-            // Wait for all threads
-            try writer.print("\n", .{});
-            for (level, 0..) |_, i| {
-                try writer.print("        threads[{d}].join();\n", .{i});
-            }
-
-            // Check for errors and display logs
-            for (level, 0..) |_, i| {
-                try writer.print(
-                    \\        if (results[{d}].err) |err| {{
-                    \\            const err_name = results[{d}].error_name orelse "UnknownError";
-                    \\            try stdout.print("✗ Step {{s}} failed: {{s}}\n", .{{results[{d}].step_name, err_name}});
-                    \\            return err;
-                    \\        }}
-                    \\        // Display step output
-                    \\        if (std.fs.cwd().readFileAlloc(allocator, log_paths[{d}], 1024 * 1024)) |log_content_{d}| {{
-                    \\            defer allocator.free(log_content_{d});
-                    \\            if (log_content_{d}.len > 0) {{
-                    \\                try stdout.print("{{s}}", .{{log_content_{d}}});
-                    \\            }}
-                    \\        }} else |err| {{
-                    \\
-                , .{i, i, i, i, i, i, i, i});
-                const step = pipe.steps[level[i]];
-                try writer.print("            try stdout.print(\"Warning: Could not read log for step {s}: {{any}}\\n\", .{{err}});\n", .{step.name});
-                try writer.print(
-                    \\        }}
-                    \\        try stdout.print("✓ Step {{s}} completed\n", .{{results[{d}].step_name}});
-                    \\
-                , .{i});
-            }
-            try writer.print(
-                \\        try stdout.print("\n", .{{}});
-                \\    }}
-                \\
-                \\
-            , .{});
+            try writer.print("        log_paths[{d}] = try std.fmt.allocPrint(allocator, \"{{s}}/step_{s}.log\", .{{log_dir}});\n", .{ i, step.id });
         }
+        try writer.print("        defer for (log_paths) |lp| allocator.free(lp);\n\n", .{});
+
+        // Define thread function for each step in this level
+        for (level, 0..) |step_idx, i| {
+            const step = pipe.steps[step_idx];
+            try writer.print(
+                \\        const step{d}_fn = struct {{
+                \\            fn run(result: *StepResult, log_path: []const u8) void {{
+                \\                var thread_gpa = std.heap.GeneralPurposeAllocator(.{{}}){{}};
+                \\                defer _ = thread_gpa.deinit();
+                \\                const thread_allocator = thread_gpa.allocator();
+                \\                result.step_name = "{s}";
+                \\                step_{s}.execute(thread_allocator, log_path) catch |err| {{
+                \\                    result.err = err;
+                \\                    result.error_name = "StepExecutionFailed";
+                \\                    return;
+                \\                }};
+                \\            }}
+                \\        }}.run;
+                \\
+                \\
+            , .{ i, step.name, step.id });
+        }
+
+        // Spawn threads
+        try writer.print("        try stdout.print(\"Running {d} steps in parallel...\\n\", .{{}});\n", .{level.len});
+        for (level, 0..) |_, i| {
+            try writer.print("        threads[{d}] = try std.Thread.spawn(.{{}}, step{d}_fn, .{{&results[{d}], log_paths[{d}]}});\n", .{ i, i, i, i });
+        }
+
+        // Wait for all threads
+        try writer.print("\n", .{});
+        for (level, 0..) |_, i| {
+            try writer.print("        threads[{d}].join();\n", .{i});
+        }
+
+        // Check for errors and display logs
+        for (level, 0..) |_, i| {
+            try writer.print(
+                \\        if (results[{d}].err) |err| {{
+                \\            const err_name = results[{d}].error_name orelse "UnknownError";
+                \\            try stdout.print("✗ Step {{s}} failed: {{s}}\n", .{{results[{d}].step_name, err_name}});
+                \\            return err;
+                \\        }}
+                \\        // Display step output
+                \\        if (std.fs.cwd().readFileAlloc(allocator, log_paths[{d}], 1024 * 1024)) |log_content_{d}| {{
+                \\            defer allocator.free(log_content_{d});
+                \\            if (log_content_{d}.len > 0) {{
+                \\                try stdout.print("{{s}}", .{{log_content_{d}}});
+                \\            }}
+                \\        }} else |err| {{
+                \\
+            , .{ i, i, i, i, i, i, i, i });
+            const step = pipe.steps[level[i]];
+            try writer.print("            try stdout.print(\"Warning: Could not read log for step {s}: {{any}}\\n\", .{{err}});\n", .{step.name});
+            try writer.print(
+                \\        }}
+                \\        try stdout.print("✓ Step {{s}} completed\n", .{{results[{d}].step_name}});
+                \\
+            , .{i});
+        }
+        try writer.print(
+            \\        try stdout.print("\n", .{{}});
+            \\    }}
+            \\
+            \\
+        , .{});
     }
 
     try writer.writeAll(templates.main_success_footer);
