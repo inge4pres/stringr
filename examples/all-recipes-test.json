@@ -1,0 +1,56 @@
+{
+  "name": "all-recipes-test",
+  "description": "Test pipeline demonstrating all recipe types",
+  "steps": [
+    {
+      "id": "cache-restore",
+      "name": "Restore cache",
+      "action": {
+        "type": "cache",
+        "parameters": {
+          "action": "restore",
+          "key": "test-cache-v1",
+          "paths": ".zig-cache"
+        }
+      }
+    },
+    {
+      "id": "docker-build",
+      "name": "Build with Docker",
+      "depends_on": ["cache-restore"],
+      "action": {
+        "type": "docker",
+        "parameters": {
+          "image": "alpine:latest",
+          "command": "echo 'Building in container'; ls -la"
+        }
+      }
+    },
+    {
+      "id": "http-request",
+      "name": "HTTP health check",
+      "depends_on": ["docker-build"],
+      "action": {
+        "type": "http",
+        "parameters": {
+          "url": "https://httpbin.org/get",
+          "method": "GET",
+          "fail_on_error": "false"
+        }
+      }
+    },
+    {
+      "id": "cache-save",
+      "name": "Save cache",
+      "depends_on": ["http-request"],
+      "action": {
+        "type": "cache",
+        "parameters": {
+          "action": "save",
+          "key": "test-cache-v1",
+          "paths": ".zig-cache"
+        }
+      }
+    }
+  ]
+}

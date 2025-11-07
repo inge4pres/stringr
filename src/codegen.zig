@@ -2,6 +2,17 @@ const std = @import("std");
 const pipeline = @import("pipeline.zig");
 const graph = @import("graph.zig");
 const templates = @import("templates.zig");
+const recipe = @import("recipe.zig");
+
+/// Sanitize a step ID to be a valid Zig identifier
+/// Replaces hyphens with underscores
+fn sanitizeIdentifier(allocator: std.mem.Allocator, id: []const u8) ![]const u8 {
+    var result = try allocator.alloc(u8, id.len);
+    for (id, 0..) |char, i| {
+        result[i] = if (char == '-') '_' else char;
+    }
+    return result;
+}
 
 /// Generate all files needed for the pipeline executable
 pub fn generate(
@@ -18,6 +29,10 @@ pub fn generate(
     defer allocator.free(src_path);
     try std.fs.cwd().makePath(src_path);
 
+    // Generate build.zig.zon
+    try writer.print("Generating build.zig.zon...\n", .{});
+    try generateBuildZigZon(allocator, pipe, output_dir);
+
     // Generate build.zig
     try writer.print("Generating build.zig...\n", .{});
     try generateBuildZig(allocator, pipe, output_dir);
@@ -29,6 +44,24 @@ pub fn generate(
     // Generate step implementations
     try writer.print("Generating step implementations...\n", .{});
     try generateStepFiles(allocator, pipe, output_dir);
+
+    // Fix the fingerprint by running zig build and capturing the suggested value
+    try writer.print("Updating fingerprint...\n", .{});
+    try fixFingerprint(allocator, output_dir, writer);
+}
+
+fn generateBuildZigZon(allocator: std.mem.Allocator, pipe: pipeline.Pipeline, output_dir: []const u8) !void {
+    const zon_path = try std.fs.path.join(allocator, &.{ output_dir, "build.zig.zon" });
+    defer allocator.free(zon_path);
+
+    const file = try std.fs.cwd().createFile(zon_path, .{});
+    defer file.close();
+
+    // Generate build.zig.zon content
+    const zon_content = try templates.buildZigZon(allocator, pipe.name);
+    defer allocator.free(zon_content);
+
+    try file.writeAll(zon_content);
 }
 
 fn generateBuildZig(allocator: std.mem.Allocator, pipe: pipeline.Pipeline, output_dir: []const u8) !void {
@@ -64,7 +97,9 @@ fn generateMainZig(allocator: std.mem.Allocator, pipe: pipeline.Pipeline, output
     // Write imports
     try writer.writeAll(templates.main_imports_header);
     for (pipe.steps) |step| {
-        try writer.print("const step_{s} = @import(\"step_{s}.zig\");\n", .{ step.id, step.id });
+        const safe_id = try sanitizeIdentifier(allocator, step.id);
+        defer allocator.free(safe_id);
+        try writer.print("const step_{s} = @import(\"step_{s}.zig\");\n", .{ safe_id, step.id });
     }
     try writer.writeAll("\n");
 
@@ -111,6 +146,8 @@ fn generateMainZig(allocator: std.mem.Allocator, pipe: pipeline.Pipeline, output
         // Define thread function for each step in this level
         for (level, 0..) |step_idx, i| {
             const step = pipe.steps[step_idx];
+            const safe_id = try sanitizeIdentifier(allocator, step.id);
+            defer allocator.free(safe_id);
             try writer.print(
                 \\        const step{d}_fn = struct {{
                 \\            fn run(result: *StepResult, log_path: []const u8) void {{
@@ -127,7 +164,7 @@ fn generateMainZig(allocator: std.mem.Allocator, pipe: pipeline.Pipeline, output
                 \\        }}.run;
                 \\
                 \\
-            , .{ i, step.name, step.id });
+            , .{ i, step.name, safe_id });
         }
 
         // Spawn threads
@@ -203,13 +240,80 @@ fn generateStepFiles(allocator: std.mem.Allocator, pipe: pipeline.Pipeline, outp
     }
 }
 
+/// Run zig build to get the suggested fingerprint and update the .zon file
+fn fixFingerprint(allocator: std.mem.Allocator, output_dir: []const u8, writer: *std.Io.Writer) !void {
+    // Run zig build in the output directory to get the suggested fingerprint
+    var child = std.process.Child.init(&.{ "zig", "build" }, allocator);
+    child.cwd = output_dir;
+    child.stdout_behavior = .Pipe;
+    child.stderr_behavior = .Pipe;
+
+    try child.spawn();
+
+    var stdout_buffer: std.ArrayList(u8) = .empty;
+    defer stdout_buffer.deinit(allocator);
+    var stderr_buffer: std.ArrayList(u8) = .empty;
+    defer stderr_buffer.deinit(allocator);
+
+    try child.collectOutput(allocator, &stdout_buffer, &stderr_buffer, 10 * 1024 * 1024);
+    _ = try child.wait();
+
+    // Parse the stderr to find the suggested fingerprint
+    // Error format: "error: missing top-level 'fingerprint' field; suggested value: 0x..."
+    // or: "error: invalid fingerprint: 0x...; if this is a new or forked package, use this value: 0x..."
+    const stderr_text = stderr_buffer.items;
+
+    const fingerprint_value = blk: {
+        // Look for "suggested value:" pattern
+        if (std.mem.indexOf(u8, stderr_text, "suggested value: ")) |idx| {
+            const start = idx + "suggested value: ".len;
+            const end = std.mem.indexOfPos(u8, stderr_text, start, "\n") orelse stderr_text.len;
+            break :blk std.mem.trim(u8, stderr_text[start..end], " \t\r");
+        }
+        // Look for "use this value:" pattern
+        if (std.mem.indexOf(u8, stderr_text, "use this value: ")) |idx| {
+            const start = idx + "use this value: ".len;
+            const end = std.mem.indexOfPos(u8, stderr_text, start, "\n") orelse stderr_text.len;
+            break :blk std.mem.trim(u8, stderr_text[start..end], " \t\r");
+        }
+        // If we can't find the suggested fingerprint, something went wrong
+        try writer.print("Warning: Could not extract fingerprint from zig build output\n", .{});
+        return;
+    };
+
+    // Read the current .zon file
+    const zon_path = try std.fs.path.join(allocator, &.{ output_dir, "build.zig.zon" });
+    defer allocator.free(zon_path);
+
+    const zon_file = try std.fs.cwd().openFile(zon_path, .{});
+    defer zon_file.close();
+
+    const zon_content = try zon_file.readToEndAlloc(allocator, 1024 * 1024);
+    defer allocator.free(zon_content);
+
+    // Add the fingerprint field before the closing brace
+    const updated_content = try std.fmt.allocPrint(
+        allocator,
+        "{s}    .fingerprint = {s},\n}}\n",
+        .{ zon_content[0 .. zon_content.len - 2], fingerprint_value }, // Remove the last "}\n"
+    );
+    defer allocator.free(updated_content);
+
+    // Write the updated content back
+    const updated_file = try std.fs.cwd().createFile(zon_path, .{});
+    defer updated_file.close();
+    try updated_file.writeAll(updated_content);
+
+    try writer.print("Fingerprint added: {s}\n", .{fingerprint_value});
+}
+
 fn generateStepImplementation(writer: *std.Io.Writer, step: pipeline.Step, global_env: ?std.StringHashMap([]const u8)) !void {
     try writer.writeAll(templates.step_header);
 
     // Determine if this action type supports environment variables
     const action_supports_env = switch (step.action) {
         .shell, .compile, .test_run, .checkout => true,
-        .artifact, .custom => false,
+        .artifact, .recipe => false,
     };
 
     // Determine if we need to create an environment map
@@ -311,8 +415,42 @@ fn generateStepImplementation(writer: *std.Io.Writer, step: pipeline.Step, globa
             try writer.print(templates.ArtifactAction.copy_artifact, .{ artifact.destination, artifact.source_path, artifact.destination, artifact.source_path, artifact.destination });
         },
 
-        .custom => |custom| {
-            try writer.print(templates.CustomAction.not_implemented, .{ custom.type_name, custom.type_name });
+        .recipe => |r| {
+            // Generate recipe instantiation code
+            try writer.writeAll("    // Recipe: ");
+            try writer.writeAll(r.type_name);
+            try writer.writeAll("\n");
+            try writer.writeAll("    const recipe_mod = @import(\"recipe\");\n");
+            try writer.writeAll("    var config = std.StringHashMap([]const u8).init(allocator);\n");
+            try writer.writeAll("    defer config.deinit();\n");
+
+            // Add all parameters to the config HashMap
+            var it = r.parameters.iterator();
+            while (it.next()) |entry| {
+                try writer.print("    try config.put(\"{s}\", \"{s}\");\n", .{ entry.key_ptr.*, entry.value_ptr.* });
+            }
+
+            try writer.writeAll("\n");
+
+            // Generate recipe-specific instantiation and execution
+            const recipe_type_capitalized = blk: {
+                if (std.mem.eql(u8, r.type_name, "docker")) break :blk "Docker";
+                if (std.mem.eql(u8, r.type_name, "cache")) break :blk "Cache";
+                if (std.mem.eql(u8, r.type_name, "http")) break :blk "Http";
+                if (std.mem.eql(u8, r.type_name, "slack")) break :blk "Slack";
+                break :blk null;
+            };
+
+            if (recipe_type_capitalized) |recipe_type| {
+                try writer.print("    var {s}_instance = try recipe_mod.{s}.{s}.init(allocator, config);\n", .{ r.type_name, r.type_name, recipe_type });
+                try writer.print("    defer {s}_instance.deinit(allocator);\n", .{r.type_name});
+                try writer.writeAll("\n");
+                try writer.print("    var {s}_recipe = {s}_instance.recipe();\n", .{ r.type_name, r.type_name });
+                try writer.print("    try {s}_recipe.run(allocator, stdout);\n", .{r.type_name});
+            } else {
+                // Unknown recipe - use fallback template
+                try writer.print(templates.Recipe.not_implemented, .{ r.type_name, r.type_name });
+            }
         },
     }
 

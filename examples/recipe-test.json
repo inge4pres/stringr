@@ -1,0 +1,39 @@
+{
+  "name": "recipe-test-pipeline",
+  "description": "Test pipeline demonstrating Recipe usage",
+  "steps": [
+    {
+      "id": "setup",
+      "name": "Setup environment",
+      "action": {
+        "type": "shell",
+        "command": "echo 'Setting up environment'"
+      }
+    },
+    {
+      "id": "docker-build",
+      "name": "Build with Docker",
+      "depends_on": ["setup"],
+      "action": {
+        "type": "docker",
+        "parameters": {
+          "image": "nginx:latest",
+          "command": "echo 'Running in container'",
+          "port": "8080"
+        }
+      }
+    },
+    {
+      "id": "notify",
+      "name": "Send notification",
+      "depends_on": ["docker-build"],
+      "action": {
+        "type": "slack",
+        "parameters": {
+          "channel": "#builds",
+          "message": "Build completed successfully"
+        }
+      }
+    }
+  ]
+}

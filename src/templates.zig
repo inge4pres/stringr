@@ -1,5 +1,44 @@
 const std = @import("std");
 
+// Build.zig.zon Template
+
+pub fn buildZigZon(allocator: std.mem.Allocator, pipeline_name: []const u8) ![]const u8 {
+    // Convert pipeline name to valid enum literal (replace hyphens with underscores)
+    const safe_name = try allocator.alloc(u8, pipeline_name.len);
+    defer allocator.free(safe_name);
+
+    for (pipeline_name, 0..) |c, i| {
+        safe_name[i] = if (c == '-') '_' else c;
+    }
+
+    // Note: We omit the fingerprint field initially. On first build, Zig will
+    // suggest the correct fingerprint value to add.
+    //
+    // For local development/testing, use .path instead of .url to reference
+    // the local better-ci repository:
+    return std.fmt.allocPrint(
+        allocator,
+        \\.{{
+        \\    .name = .{s},
+        \\    .version = "0.0.1",
+        \\    .minimum_zig_version = "0.15.2",
+        \\    .dependencies = .{{
+        \\        .recipes = .{{
+        \\            .path = "../../..",
+        \\        }},
+        \\    }},
+        \\    .paths = .{{
+        \\        "build.zig",
+        \\        "build.zig.zon",
+        \\        "src",
+        \\    }},
+        \\}}
+        \\
+    ,
+        .{safe_name},
+    );
+}
+
 // Build.zig Templates
 
 pub const build_header =
@@ -22,6 +61,14 @@ pub const build_middle =
     \\            .optimize = optimize,
     \\        }),
     \\    });
+    \\
+    \\    // Add recipe module from dependency
+    \\    const recipes_dep = b.dependency("recipes", .{
+    \\        .target = target,
+    \\        .optimize = optimize,
+    \\    });
+    \\    const recipe_mod = recipes_dep.module("recipes");
+    \\    exe.root_module.addImport("recipe", recipe_mod);
     \\
     \\    b.installArtifact(exe);
     \\
@@ -338,11 +385,12 @@ pub const ArtifactAction = struct {
     ;
 };
 
-pub const CustomAction = struct {
+pub const Recipe = struct {
     pub const not_implemented =
-        \\    // Custom action: {s}
-        \\    // TODO: Implement custom action
-        \\    try stdout.print("Custom action '{s}' not yet implemented\\n", .{{}});
+        \\    _ = allocator; // Recipe doesn't use allocator yet
+        \\    // Recipe: {s}
+        \\    // TODO: Implement recipe
+        \\    try stdout.print("Recipe '{s}' not yet implemented\\n", .{{}});
         \\    return error.NotImplemented;
         \\
     ;

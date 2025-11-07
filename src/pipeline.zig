@@ -55,6 +55,23 @@ pub const Step = struct {
     }
 };
 
+/// Recipe definition - stores recipe type and configuration for code generation
+pub const RecipeDefinition = struct {
+    type_name: []const u8,
+    parameters: std.StringHashMap([]const u8),
+
+    pub fn deinit(self: RecipeDefinition, allocator: std.mem.Allocator) void {
+        allocator.free(self.type_name);
+        var it = self.parameters.iterator();
+        while (it.next()) |entry| {
+            allocator.free(entry.key_ptr.*);
+            allocator.free(entry.value_ptr.*);
+        }
+        var params_copy = self.parameters;
+        params_copy.deinit();
+    }
+};
+
 /// Different types of actions a step can perform
 pub const Action = union(enum) {
     /// Run a shell command
@@ -72,8 +89,8 @@ pub const Action = union(enum) {
     /// Upload artifacts
     artifact: ArtifactAction,
 
-    /// Custom action (for extensibility)
-    custom: CustomAction,
+    /// Recipe - extensible custom action
+    recipe: RecipeDefinition,
 
     pub fn deinit(self: Action, allocator: std.mem.Allocator) void {
         switch (self) {
@@ -146,21 +163,6 @@ pub const ArtifactAction = struct {
     }
 };
 
-pub const CustomAction = struct {
-    type_name: []const u8,
-    parameters: std.StringHashMap([]const u8),
-
-    pub fn deinit(self: CustomAction, allocator: std.mem.Allocator) void {
-        allocator.free(self.type_name);
-        var it = self.parameters.iterator();
-        while (it.next()) |entry| {
-            allocator.free(entry.key_ptr.*);
-            allocator.free(entry.value_ptr.*);
-        }
-        var params_copy = self.parameters;
-        params_copy.deinit();
-    }
-};
 
 test "pipeline creation" {
     const testing = std.testing;

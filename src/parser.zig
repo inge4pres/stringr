@@ -370,17 +370,17 @@ fn parseActionFromJson(allocator: std.mem.Allocator, action_json: Action, step_i
             },
         };
     } else {
-        // Custom action
+        // Recipe action - extensible custom action type
         var parameters = std.StringHashMap([]const u8).init(allocator);
         if (action_json.parameters) |params_json| {
             if (params_json != .object) {
-                std.debug.print("Error: Field 'parameters' must be an object in custom action for step '{s}'\n", .{step_id});
+                std.debug.print("Error: Field 'parameters' must be an object in recipe action for step '{s}'\n", .{step_id});
                 return error.InvalidFieldValue;
             }
             var it = params_json.object.iterator();
             while (it.next()) |entry| {
                 if (entry.value_ptr.* != .string) {
-                    std.debug.print("Error: Parameter '{s}' must be a string in custom action for step '{s}'\n", .{ entry.key_ptr.*, step_id });
+                    std.debug.print("Error: Parameter '{s}' must be a string in recipe action for step '{s}'\n", .{ entry.key_ptr.*, step_id });
                     return error.InvalidFieldValue;
                 }
                 const key = try allocator.dupe(u8, entry.key_ptr.*);
@@ -390,7 +390,7 @@ fn parseActionFromJson(allocator: std.mem.Allocator, action_json: Action, step_i
         }
 
         return pipeline.Action{
-            .custom = .{
+            .recipe = .{
                 .type_name = try allocator.dupe(u8, action_type),
                 .parameters = parameters,
             },

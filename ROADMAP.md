@@ -32,7 +32,12 @@ The core compiler reads pipeline definitions and generates Zig code that compile
   - Automated example generation with `zig build examples`
   - Organized generated files in `examples/_generated/`
   - Proper .gitignore for generated artifacts
-- ✅ Example pipelines (hello-world, simple-pipeline, parallel-pipeline)
+- ✅ **Environment variable management**
+  - Global environment file support (.env format)
+  - Merging of global and step-specific environment variables
+  - Step-specific variables override global ones
+  - CLI `--env-file` option for loading environment files
+- ✅ Example pipelines (hello-world, simple-pipeline, parallel-pipeline, env-test)
 
 **Remaining Work:**
 - [ ] Advanced action types (docker, cache, notifications)
@@ -43,6 +48,7 @@ The core compiler reads pipeline definitions and generates Zig code that compile
 - [ ] CLI improvements (verbose mode, dry-run, validation command)
 - [ ] More example pipelines
 - [ ] Performance optimizations
+- [ ] Secret management integration (separate from plain environment variables)
 
 ### Technical Details
 
