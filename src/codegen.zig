@@ -44,10 +44,6 @@ pub fn generate(
     // Generate step implementations
     try writer.print("Generating step implementations...\n", .{});
     try generateStepFiles(allocator, pipe, output_dir);
-
-    // Fix the fingerprint by running zig build and capturing the suggested value
-    try writer.print("Updating fingerprint...\n", .{});
-    try fixFingerprint(allocator, output_dir, writer);
 }
 
 fn generateBuildZigZon(allocator: std.mem.Allocator, pipe: pipeline.Pipeline, output_dir: []const u8) !void {
@@ -238,73 +234,6 @@ fn generateStepFiles(allocator: std.mem.Allocator, pipe: pipeline.Pipeline, outp
 
         try generateStepImplementation(writer, step, pipe.environment);
     }
-}
-
-/// Run zig build to get the suggested fingerprint and update the .zon file
-fn fixFingerprint(allocator: std.mem.Allocator, output_dir: []const u8, writer: *std.Io.Writer) !void {
-    // Run zig build in the output directory to get the suggested fingerprint
-    var child = std.process.Child.init(&.{ "zig", "build" }, allocator);
-    child.cwd = output_dir;
-    child.stdout_behavior = .Pipe;
-    child.stderr_behavior = .Pipe;
-
-    try child.spawn();
-
-    var stdout_buffer: std.ArrayList(u8) = .empty;
-    defer stdout_buffer.deinit(allocator);
-    var stderr_buffer: std.ArrayList(u8) = .empty;
-    defer stderr_buffer.deinit(allocator);
-
-    try child.collectOutput(allocator, &stdout_buffer, &stderr_buffer, 10 * 1024 * 1024);
-    _ = try child.wait();
-
-    // Parse the stderr to find the suggested fingerprint
-    // Error format: "error: missing top-level 'fingerprint' field; suggested value: 0x..."
-    // or: "error: invalid fingerprint: 0x...; if this is a new or forked package, use this value: 0x..."
-    const stderr_text = stderr_buffer.items;
-
-    const fingerprint_value = blk: {
-        // Look for "suggested value:" pattern
-        if (std.mem.indexOf(u8, stderr_text, "suggested value: ")) |idx| {
-            const start = idx + "suggested value: ".len;
-            const end = std.mem.indexOfPos(u8, stderr_text, start, "\n") orelse stderr_text.len;
-            break :blk std.mem.trim(u8, stderr_text[start..end], " \t\r");
-        }
-        // Look for "use this value:" pattern
-        if (std.mem.indexOf(u8, stderr_text, "use this value: ")) |idx| {
-            const start = idx + "use this value: ".len;
-            const end = std.mem.indexOfPos(u8, stderr_text, start, "\n") orelse stderr_text.len;
-            break :blk std.mem.trim(u8, stderr_text[start..end], " \t\r");
-        }
-        // If we can't find the suggested fingerprint, something went wrong
-        try writer.print("Warning: Could not extract fingerprint from zig build output\n", .{});
-        return;
-    };
-
-    // Read the current .zon file
-    const zon_path = try std.fs.path.join(allocator, &.{ output_dir, "build.zig.zon" });
-    defer allocator.free(zon_path);
-
-    const zon_file = try std.fs.cwd().openFile(zon_path, .{});
-    defer zon_file.close();
-
-    const zon_content = try zon_file.readToEndAlloc(allocator, 1024 * 1024);
-    defer allocator.free(zon_content);
-
-    // Add the fingerprint field before the closing brace
-    const updated_content = try std.fmt.allocPrint(
-        allocator,
-        "{s}    .fingerprint = {s},\n}}\n",
-        .{ zon_content[0 .. zon_content.len - 2], fingerprint_value }, // Remove the last "}\n"
-    );
-    defer allocator.free(updated_content);
-
-    // Write the updated content back
-    const updated_file = try std.fs.cwd().createFile(zon_path, .{});
-    defer updated_file.close();
-    try updated_file.writeAll(updated_content);
-
-    try writer.print("Fingerprint added: {s}\n", .{fingerprint_value});
 }
 
 fn generateStepImplementation(writer: *std.Io.Writer, step: pipeline.Step, global_env: ?std.StringHashMap([]const u8)) !void {

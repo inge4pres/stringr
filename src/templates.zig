@@ -2,6 +2,17 @@ const std = @import("std");
 
 // Build.zig.zon Template
 
+/// Generate a package fingerprint similar to how `zig init` does it.
+/// The fingerprint is a 64-bit packed struct { id: u32, checksum: u32 }:
+/// - Bits 0-31 (lower): random ID (must not be 0 or 0xffffffff)
+/// - Bits 32-63 (upper): CRC32 checksum of the package name
+fn generateFingerprint(name: []const u8) u64 {
+    const random_id = std.crypto.random.intRangeLessThan(u32, 1, 0xffffffff);
+    const checksum = std.hash.Crc32.hash(name);
+    // Pack as: id in lower 32 bits, checksum in upper 32 bits
+    return @as(u64, random_id) | (@as(u64, checksum) << 32);
+}
+
 pub fn buildZigZon(allocator: std.mem.Allocator, pipeline_name: []const u8) ![]const u8 {
     // Convert pipeline name to valid enum literal (replace hyphens with underscores)
     const safe_name = try allocator.alloc(u8, pipeline_name.len);
@@ -11,9 +22,9 @@ pub fn buildZigZon(allocator: std.mem.Allocator, pipeline_name: []const u8) ![]c
         safe_name[i] = if (c == '-') '_' else c;
     }
 
-    // Note: We omit the fingerprint field initially. On first build, Zig will
-    // suggest the correct fingerprint value to add.
-    //
+    // Generate fingerprint based on package name
+    const fingerprint = generateFingerprint(safe_name);
+
     // For local development/testing, use .path instead of .url to reference
     // the local better-ci repository:
     return std.fmt.allocPrint(
@@ -32,10 +43,11 @@ pub fn buildZigZon(allocator: std.mem.Allocator, pipeline_name: []const u8) ![]c
         \\        "build.zig.zon",
         \\        "src",
         \\    }},
+        \\    .fingerprint = 0x{x},
         \\}}
         \\
     ,
-        .{safe_name},
+        .{ safe_name, fingerprint },
     );
 }
 
