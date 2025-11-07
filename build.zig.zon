@@ -2,6 +2,12 @@
     .name = .better_ci,
     .version = "0.0.1",
     .minimum_zig_version = "0.15.2",
-    .paths = .{"src", "README.md", "examples"},
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "src",
+        "README.md",
+        "examples",
+    },
     .fingerprint = 0x9b9b08384b84b5f,
 }

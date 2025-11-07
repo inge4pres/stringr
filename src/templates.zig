@@ -25,8 +25,7 @@ pub fn buildZigZon(allocator: std.mem.Allocator, pipeline_name: []const u8) ![]c
     // Generate fingerprint based on package name
     const fingerprint = generateFingerprint(safe_name);
 
-    // For local development/testing, use .path instead of .url to reference
-    // the local better-ci repository:
+    // Use GitHub URL for remote dependency fetching
     return std.fmt.allocPrint(
         allocator,
         \\.{{
@@ -35,7 +34,8 @@ pub fn buildZigZon(allocator: std.mem.Allocator, pipeline_name: []const u8) ![]c
         \\    .minimum_zig_version = "0.15.2",
         \\    .dependencies = .{{
         \\        .recipes = .{{
-        \\            .path = "../../..",
+        \\            .url = "git+https://github.com/inge4pres/better-ci#main",
+        \\            .hash = "better_ci-0.0.1-X0u4hCLqAQBj1dWTRwp8wp9CTf_fZwvnEekEh0BmRqOW",
         \\        }},
         \\    }},
         \\    .paths = .{{
