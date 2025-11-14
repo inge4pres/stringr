@@ -342,10 +342,8 @@ fn parseActionFromJson(allocator: std.mem.Allocator, action_json: ActionSchema, 
     else
         action_json.type;
 
-    const action_tag = std.meta.stringToEnum(ActionTag, action_type_str) orelse {
-        // If not a built-in action type, treat as recipe
-        return parseRecipeAction(allocator, action_json);
-    };
+    // If not a built-in action type, default to recipe
+    const action_tag = std.meta.stringToEnum(ActionTag, action_type_str) orelse .recipe;
 
     return switch (action_tag) {
         .shell => {
@@ -479,7 +477,7 @@ fn parseActionFromJson(allocator: std.mem.Allocator, action_json: ActionSchema, 
                 },
             };
         },
-        .recipe => unreachable, // Handled by parseRecipeAction
+        .recipe => return parseRecipeAction(allocator, action_json),
     };
 }
 
