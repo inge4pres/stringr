@@ -12,8 +12,18 @@ pub const ParseError = error{
 } || std.mem.Allocator.Error || std.fs.File.OpenError || std.fs.File.ReadError || std.fs.File.StatError;
 
 /// JSON schema structs for deserialization
+/// Condition JSON schema
+const ConditionSchema = struct {
+    type: []const u8,
+    // env_equals fields
+    variable: ?[]const u8 = null,
+    value: ?[]const u8 = null,
+    // file_exists fields
+    path: ?[]const u8 = null,
+};
+
 /// Action JSON schema
-const Action = struct {
+const ActionSchema = struct {
     type: []const u8,
     // Shell action fields
     command: ?[]const u8 = null,
@@ -38,20 +48,20 @@ const Action = struct {
 
 /// Define a step in the execution.
 /// Depends is a list of other steps' ids.
-const Step = struct {
+const StepSchema = struct {
     id: []const u8,
     name: []const u8,
-    action: Action,
+    action: ActionSchema,
     depends_on: ?[][]const u8 = null,
     env: ?std.json.Value = null,
-    condition: ?std.json.Value = null,
+    condition: ?ConditionSchema = null,
 };
 
 /// Pipeline schema describes the overall pipeline structure
 const PipelineSchema = struct {
     name: []const u8,
     description: []const u8,
-    steps: []Step,
+    steps: []StepSchema,
 };
 
 /// Parse a pipeline definition file (JSON format)
@@ -149,7 +159,7 @@ pub fn parseDefinition(allocator: std.mem.Allocator, json_str: []const u8) Parse
     };
 }
 
-fn parseStepFromJson(allocator: std.mem.Allocator, step_json: Step, step_index: usize) ParseError!pipeline.Step {
+fn parseStepFromJson(allocator: std.mem.Allocator, step_json: StepSchema, step_index: usize) ParseError!pipeline.Step {
     // Validate step ID
     if (step_json.id.len == 0) {
         std.debug.print("Error: Field 'id' must be a non-empty string in step at index {d}\n", .{step_index});
@@ -226,8 +236,8 @@ fn parseStepFromJson(allocator: std.mem.Allocator, step_json: Step, step_index: 
     const action = try parseActionFromJson(allocator, step_json.action, id);
 
     // Parse condition (optional)
-    const cond = if (step_json.condition) |cond_json|
-        try parseConditionFromJson(allocator, cond_json, id)
+    const cond = if (step_json.condition) |cond_schema|
+        try parseConditionFromSchema(allocator, cond_schema, id)
     else
         null;
 
@@ -241,254 +251,236 @@ fn parseStepFromJson(allocator: std.mem.Allocator, step_json: Step, step_index: 
     };
 }
 
-fn parseConditionFromJson(allocator: std.mem.Allocator, cond_json: std.json.Value, step_id: []const u8) ParseError!condition.Condition {
-    if (cond_json != .object) {
-        std.debug.print("Error: Field 'condition' must be an object in step '{s}'\n", .{step_id});
+fn parseConditionFromSchema(allocator: std.mem.Allocator, cond_schema: ConditionSchema, step_id: []const u8) ParseError!condition.Condition {
+    const ConditionTag = std.meta.Tag(condition.Condition);
+    const cond_type = std.meta.stringToEnum(ConditionTag, cond_schema.type) orelse {
+        std.debug.print("Error: Unknown condition type '{s}' in step '{s}'. Must be: always, never, env_equals, env_exists, or file_exists\n", .{ cond_schema.type, step_id });
         return ParseError.InvalidFieldValue;
-    }
-
-    const cond_obj = cond_json.object;
-    const cond_type = cond_obj.get("type") orelse {
-        std.debug.print("Error: Missing required field 'type' in condition for step '{s}'\n", .{step_id});
-        return ParseError.MissingField;
     };
 
-    if (cond_type != .string) {
-        std.debug.print("Error: Field 'type' must be a string in condition for step '{s}'\n", .{step_id});
-        return ParseError.InvalidFieldValue;
-    }
+    return switch (cond_type) {
+        .always => condition.Condition{ .always = {} },
+        .never => condition.Condition{ .never = {} },
+        .env_equals => {
+            const variable = cond_schema.variable orelse {
+                std.debug.print("Error: Missing required field 'variable' for env_equals condition in step '{s}'\n", .{step_id});
+                return ParseError.MissingField;
+            };
+            const value = cond_schema.value orelse {
+                std.debug.print("Error: Missing required field 'value' for env_equals condition in step '{s}'\n", .{step_id});
+                return ParseError.MissingField;
+            };
 
-    const type_str = cond_type.string;
+            return condition.Condition{
+                .env_equals = .{
+                    .variable = try allocator.dupe(u8, variable),
+                    .value = try allocator.dupe(u8, value),
+                },
+            };
+        },
+        .env_exists => {
+            const variable = cond_schema.variable orelse {
+                std.debug.print("Error: Missing required field 'variable' for env_exists condition in step '{s}'\n", .{step_id});
+                return ParseError.MissingField;
+            };
 
-    if (std.mem.eql(u8, type_str, "always")) {
-        return condition.Condition{ .always = {} };
-    } else if (std.mem.eql(u8, type_str, "never")) {
-        return condition.Condition{ .never = {} };
-    } else if (std.mem.eql(u8, type_str, "env_equals")) {
-        const variable = cond_obj.get("variable") orelse {
-            std.debug.print("Error: Missing required field 'variable' for env_equals condition in step '{s}'\n", .{step_id});
-            return ParseError.MissingField;
-        };
-        if (variable != .string) {
-            std.debug.print("Error: Field 'variable' must be a string in env_equals condition for step '{s}'\n", .{step_id});
-            return ParseError.InvalidFieldValue;
-        }
+            return condition.Condition{
+                .env_exists = .{
+                    .variable = try allocator.dupe(u8, variable),
+                },
+            };
+        },
+        .file_exists => {
+            const path = cond_schema.path orelse {
+                std.debug.print("Error: Missing required field 'path' for file_exists condition in step '{s}'\n", .{step_id});
+                return ParseError.MissingField;
+            };
 
-        const value = cond_obj.get("value") orelse {
-            std.debug.print("Error: Missing required field 'value' for env_equals condition in step '{s}'\n", .{step_id});
-            return ParseError.MissingField;
-        };
-        if (value != .string) {
-            std.debug.print("Error: Field 'value' must be a string in env_equals condition for step '{s}'\n", .{step_id});
-            return ParseError.InvalidFieldValue;
-        }
-
-        return condition.Condition{
-            .env_equals = .{
-                .variable = try allocator.dupe(u8, variable.string),
-                .value = try allocator.dupe(u8, value.string),
-            }
-        };
-    } else if (std.mem.eql(u8, type_str, "env_exists")) {
-        const variable = cond_obj.get("variable") orelse {
-            std.debug.print("Error: Missing required field 'variable' for env_exists condition in step '{s}'\n", .{step_id});
-            return ParseError.MissingField;
-        };
-        if (variable != .string) {
-            std.debug.print("Error: Field 'variable' must be a string in env_exists condition for step '{s}'\n", .{step_id});
-            return ParseError.InvalidFieldValue;
-        }
-
-        return condition.Condition{
-            .env_exists = .{
-                .variable = try allocator.dupe(u8, variable.string),
-            }
-        };
-    } else if (std.mem.eql(u8, type_str, "file_exists")) {
-        const path = cond_obj.get("path") orelse {
-            std.debug.print("Error: Missing required field 'path' for file_exists condition in step '{s}'\n", .{step_id});
-            return ParseError.MissingField;
-        };
-        if (path != .string) {
-            std.debug.print("Error: Field 'path' must be a string in file_exists condition for step '{s}'\n", .{step_id});
-            return ParseError.InvalidFieldValue;
-        }
-
-        return condition.Condition{
-            .file_exists = .{
-                .path = try allocator.dupe(u8, path.string),
-            }
-        };
-    } else {
-        std.debug.print("Error: Unknown condition type '{s}' in step '{s}'. Must be: always, never, env_equals, env_exists, or file_exists\n", .{ type_str, step_id });
-        return ParseError.InvalidFieldValue;
-    }
+            return condition.Condition{
+                .file_exists = .{
+                    .path = try allocator.dupe(u8, path),
+                },
+            };
+        },
+    };
 }
 
-fn parseActionFromJson(allocator: std.mem.Allocator, action_json: Action, step_id: []const u8) ParseError!pipeline.Action {
-    const action_type = action_json.type;
-
-    if (std.mem.eql(u8, action_type, "shell")) {
-        const command = action_json.command orelse {
-            std.debug.print("Error: Missing required field 'command' for shell action in step '{s}'\n", .{step_id});
-            return ParseError.MissingField;
-        };
-        if (command.len == 0) {
-            std.debug.print("Error: Field 'command' must be a non-empty string in shell action for step '{s}'\n", .{step_id});
-            return ParseError.InvalidFieldValue;
-        }
-        return pipeline.Action{
-            .shell = .{
-                .command = try allocator.dupe(u8, command),
-                .working_dir = if (action_json.working_dir) |wd| try allocator.dupe(u8, wd) else null,
-            },
-        };
-    } else if (std.mem.eql(u8, action_type, "compile")) {
-        const source_file = action_json.source_file orelse {
-            std.debug.print("Error: Missing required field 'source_file' for compile action in step '{s}'\n", .{step_id});
-            return ParseError.MissingField;
-        };
-        if (source_file.len == 0) {
-            std.debug.print("Error: Field 'source_file' must be a non-empty string in compile action for step '{s}'\n", .{step_id});
-            return ParseError.InvalidFieldValue;
-        }
-
-        const output_name = action_json.output_name orelse {
-            std.debug.print("Error: Missing required field 'output_name' for compile action in step '{s}'\n", .{step_id});
-            return ParseError.MissingField;
-        };
-        if (output_name.len == 0) {
-            std.debug.print("Error: Field 'output_name' must be a non-empty string in compile action for step '{s}'\n", .{step_id});
-            return ParseError.InvalidFieldValue;
-        }
-
-        const optimize_str = action_json.optimize orelse {
-            std.debug.print("Error: Missing required field 'optimize' for compile action in step '{s}'\n", .{step_id});
-            return ParseError.MissingField;
-        };
-        const optimize = if (std.mem.eql(u8, optimize_str, "Debug"))
-            pipeline.CompileAction.OptimizeMode.Debug
-        else if (std.mem.eql(u8, optimize_str, "ReleaseSafe"))
-            pipeline.CompileAction.OptimizeMode.ReleaseSafe
-        else if (std.mem.eql(u8, optimize_str, "ReleaseFast"))
-            pipeline.CompileAction.OptimizeMode.ReleaseFast
-        else if (std.mem.eql(u8, optimize_str, "ReleaseSmall"))
-            pipeline.CompileAction.OptimizeMode.ReleaseSmall
-        else {
-            std.debug.print("Error: Invalid optimize mode '{s}' in step '{s}'. Must be Debug, ReleaseSafe, ReleaseFast, or ReleaseSmall\n", .{ optimize_str, step_id });
-            return ParseError.InvalidFieldValue;
-        };
-
-        return pipeline.Action{
-            .compile = .{
-                .source_file = try allocator.dupe(u8, source_file),
-                .output_name = try allocator.dupe(u8, output_name),
-                .optimize = optimize,
-            },
-        };
-    } else if (std.mem.eql(u8, action_type, "test")) {
-        const test_file = action_json.test_file orelse {
-            std.debug.print("Error: Missing required field 'test_file' for test action in step '{s}'\n", .{step_id});
-            return ParseError.MissingField;
-        };
-        if (test_file.len == 0) {
-            std.debug.print("Error: Field 'test_file' must be a non-empty string in test action for step '{s}'\n", .{step_id});
-            return ParseError.InvalidFieldValue;
-        }
-
-        return pipeline.Action{
-            .test_run = .{
-                .test_file = try allocator.dupe(u8, test_file),
-                .filter = if (action_json.filter) |f| try allocator.dupe(u8, f) else null,
-            },
-        };
-    } else if (std.mem.eql(u8, action_type, "checkout")) {
-        const repository = action_json.repository orelse {
-            std.debug.print("Error: Missing required field 'repository' for checkout action in step '{s}'\n", .{step_id});
-            return error.MissingField;
-        };
-        if (repository.len == 0) {
-            std.debug.print("Error: Field 'repository' must be a non-empty string in checkout action for step '{s}'\n", .{step_id});
+fn parseRecipeAction(allocator: std.mem.Allocator, action_json: ActionSchema) ParseError!pipeline.Action {
+    var parameters = std.StringHashMap([]const u8).init(allocator);
+    if (action_json.parameters) |params_json| {
+        if (params_json != .object) {
+            std.debug.print("Error: Field 'parameters' must be an object in recipe action\n", .{});
             return error.InvalidFieldValue;
         }
-
-        const branch = action_json.branch orelse {
-            std.debug.print("Error: Missing required field 'branch' for checkout action in step '{s}'\n", .{step_id});
-            return error.MissingField;
-        };
-        if (branch.len == 0) {
-            std.debug.print("Error: Field 'branch' must be a non-empty string in checkout action for step '{s}'\n", .{step_id});
-            return error.InvalidFieldValue;
-        }
-
-        const path = action_json.path orelse {
-            std.debug.print("Error: Missing required field 'path' for checkout action in step '{s}'\n", .{step_id});
-            return error.MissingField;
-        };
-        if (path.len == 0) {
-            std.debug.print("Error: Field 'path' must be a non-empty string in checkout action for step '{s}'\n", .{step_id});
-            return error.InvalidFieldValue;
-        }
-
-        return pipeline.Action{
-            .checkout = .{
-                .repository = try allocator.dupe(u8, repository),
-                .branch = try allocator.dupe(u8, branch),
-                .path = try allocator.dupe(u8, path),
-            },
-        };
-    } else if (std.mem.eql(u8, action_type, "artifact")) {
-        const source_path = action_json.source_path orelse {
-            std.debug.print("Error: Missing required field 'source_path' for artifact action in step '{s}'\n", .{step_id});
-            return error.MissingField;
-        };
-        if (source_path.len == 0) {
-            std.debug.print("Error: Field 'source_path' must be a non-empty string in artifact action for step '{s}'\n", .{step_id});
-            return error.InvalidFieldValue;
-        }
-
-        const destination = action_json.destination orelse {
-            std.debug.print("Error: Missing required field 'destination' for artifact action in step '{s}'\n", .{step_id});
-            return error.MissingField;
-        };
-        if (destination.len == 0) {
-            std.debug.print("Error: Field 'destination' must be a non-empty string in artifact action for step '{s}'\n", .{step_id});
-            return error.InvalidFieldValue;
-        }
-
-        return pipeline.Action{
-            .artifact = .{
-                .source_path = try allocator.dupe(u8, source_path),
-                .destination = try allocator.dupe(u8, destination),
-            },
-        };
-    } else {
-        // Recipe action - extensible custom action type
-        var parameters = std.StringHashMap([]const u8).init(allocator);
-        if (action_json.parameters) |params_json| {
-            if (params_json != .object) {
-                std.debug.print("Error: Field 'parameters' must be an object in recipe action for step '{s}'\n", .{step_id});
+        var it = params_json.object.iterator();
+        while (it.next()) |entry| {
+            if (entry.value_ptr.* != .string) {
+                std.debug.print("Error: Parameter '{s}' must be a string in recipe action\n", .{entry.key_ptr.*});
                 return error.InvalidFieldValue;
             }
-            var it = params_json.object.iterator();
-            while (it.next()) |entry| {
-                if (entry.value_ptr.* != .string) {
-                    std.debug.print("Error: Parameter '{s}' must be a string in recipe action for step '{s}'\n", .{ entry.key_ptr.*, step_id });
-                    return error.InvalidFieldValue;
-                }
-                const key = try allocator.dupe(u8, entry.key_ptr.*);
-                const value = try allocator.dupe(u8, entry.value_ptr.*.string);
-                try parameters.put(key, value);
-            }
+            const key = try allocator.dupe(u8, entry.key_ptr.*);
+            const value = try allocator.dupe(u8, entry.value_ptr.*.string);
+            try parameters.put(key, value);
         }
-
-        return pipeline.Action{
-            .recipe = .{
-                .type_name = try allocator.dupe(u8, action_type),
-                .parameters = parameters,
-            },
-        };
     }
+
+    return pipeline.Action{
+        .recipe = .{
+            .type_name = try allocator.dupe(u8, action_json.type),
+            .parameters = parameters,
+        },
+    };
+}
+
+fn parseActionFromJson(allocator: std.mem.Allocator, action_json: ActionSchema, step_id: []const u8) ParseError!pipeline.Action {
+    const ActionTag = std.meta.Tag(pipeline.Action);
+
+    // Map JSON type string to Action enum tag
+    // Note: "test" in JSON maps to "test_run" in the Action union
+    const action_type_str = if (std.mem.eql(u8, action_json.type, "test"))
+        "test_run"
+    else
+        action_json.type;
+
+    const action_tag = std.meta.stringToEnum(ActionTag, action_type_str) orelse {
+        // If not a built-in action type, treat as recipe
+        return parseRecipeAction(allocator, action_json);
+    };
+
+    return switch (action_tag) {
+        .shell => {
+            const command = action_json.command orelse {
+                std.debug.print("Error: Missing required field 'command' for shell action in step '{s}'\n", .{step_id});
+                return ParseError.MissingField;
+            };
+            if (command.len == 0) {
+                std.debug.print("Error: Field 'command' must be a non-empty string in shell action for step '{s}'\n", .{step_id});
+                return ParseError.InvalidFieldValue;
+            }
+            return pipeline.Action{
+                .shell = .{
+                    .command = try allocator.dupe(u8, command),
+                    .working_dir = if (action_json.working_dir) |wd| try allocator.dupe(u8, wd) else null,
+                },
+            };
+        },
+        .compile => {
+            const source_file = action_json.source_file orelse {
+                std.debug.print("Error: Missing required field 'source_file' for compile action in step '{s}'\n", .{step_id});
+                return ParseError.MissingField;
+            };
+            if (source_file.len == 0) {
+                std.debug.print("Error: Field 'source_file' must be a non-empty string in compile action for step '{s}'\n", .{step_id});
+                return ParseError.InvalidFieldValue;
+            }
+
+            const output_name = action_json.output_name orelse {
+                std.debug.print("Error: Missing required field 'output_name' for compile action in step '{s}'\n", .{step_id});
+                return ParseError.MissingField;
+            };
+            if (output_name.len == 0) {
+                std.debug.print("Error: Field 'output_name' must be a non-empty string in compile action for step '{s}'\n", .{step_id});
+                return ParseError.InvalidFieldValue;
+            }
+
+            const optimize_str = action_json.optimize orelse {
+                std.debug.print("Error: Missing required field 'optimize' for compile action in step '{s}'\n", .{step_id});
+                return ParseError.MissingField;
+            };
+            const optimize = std.meta.stringToEnum(pipeline.CompileAction.OptimizeMode, optimize_str) orelse {
+                std.debug.print("Error: Invalid optimize mode '{s}' in step '{s}'. Must be Debug, ReleaseSafe, ReleaseFast, or ReleaseSmall\n", .{ optimize_str, step_id });
+                return ParseError.InvalidFieldValue;
+            };
+
+            return pipeline.Action{
+                .compile = .{
+                    .source_file = try allocator.dupe(u8, source_file),
+                    .output_name = try allocator.dupe(u8, output_name),
+                    .optimize = optimize,
+                },
+            };
+        },
+        .test_run => {
+            const test_file = action_json.test_file orelse {
+                std.debug.print("Error: Missing required field 'test_file' for test action in step '{s}'\n", .{step_id});
+                return ParseError.MissingField;
+            };
+            if (test_file.len == 0) {
+                std.debug.print("Error: Field 'test_file' must be a non-empty string in test action for step '{s}'\n", .{step_id});
+                return ParseError.InvalidFieldValue;
+            }
+
+            return pipeline.Action{
+                .test_run = .{
+                    .test_file = try allocator.dupe(u8, test_file),
+                    .filter = if (action_json.filter) |f| try allocator.dupe(u8, f) else null,
+                },
+            };
+        },
+        .checkout => {
+            const repository = action_json.repository orelse {
+                std.debug.print("Error: Missing required field 'repository' for checkout action in step '{s}'\n", .{step_id});
+                return error.MissingField;
+            };
+            if (repository.len == 0) {
+                std.debug.print("Error: Field 'repository' must be a non-empty string in checkout action for step '{s}'\n", .{step_id});
+                return error.InvalidFieldValue;
+            }
+
+            const branch = action_json.branch orelse {
+                std.debug.print("Error: Missing required field 'branch' for checkout action in step '{s}'\n", .{step_id});
+                return error.MissingField;
+            };
+            if (branch.len == 0) {
+                std.debug.print("Error: Field 'branch' must be a non-empty string in checkout action for step '{s}'\n", .{step_id});
+                return error.InvalidFieldValue;
+            }
+
+            const path = action_json.path orelse {
+                std.debug.print("Error: Missing required field 'path' for checkout action in step '{s}'\n", .{step_id});
+                return error.MissingField;
+            };
+            if (path.len == 0) {
+                std.debug.print("Error: Field 'path' must be a non-empty string in checkout action for step '{s}'\n", .{step_id});
+                return error.InvalidFieldValue;
+            }
+
+            return pipeline.Action{
+                .checkout = .{
+                    .repository = try allocator.dupe(u8, repository),
+                    .branch = try allocator.dupe(u8, branch),
+                    .path = try allocator.dupe(u8, path),
+                },
+            };
+        },
+        .artifact => {
+            const source_path = action_json.source_path orelse {
+                std.debug.print("Error: Missing required field 'source_path' for artifact action in step '{s}'\n", .{step_id});
+                return error.MissingField;
+            };
+            if (source_path.len == 0) {
+                std.debug.print("Error: Field 'source_path' must be a non-empty string in artifact action for step '{s}'\n", .{step_id});
+                return error.InvalidFieldValue;
+            }
+
+            const destination = action_json.destination orelse {
+                std.debug.print("Error: Missing required field 'destination' for artifact action in step '{s}'\n", .{step_id});
+                return error.MissingField;
+            };
+            if (destination.len == 0) {
+                std.debug.print("Error: Field 'destination' must be a non-empty string in artifact action for step '{s}'\n", .{step_id});
+                return error.InvalidFieldValue;
+            }
+
+            return pipeline.Action{
+                .artifact = .{
+                    .source_path = try allocator.dupe(u8, source_path),
+                    .destination = try allocator.dupe(u8, destination),
+                },
+            };
+        },
+        .recipe => unreachable, // Handled by parseRecipeAction
+    };
 }
 
 test "parse simple pipeline" {
