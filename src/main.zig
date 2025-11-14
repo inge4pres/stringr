@@ -145,9 +145,11 @@ fn printUsage(writer: *std.Io.Writer) !void {
 // Tests
 test {
     _ = @import("codegen.zig");
+    _ = @import("condition.zig");
     _ = @import("envfile.zig");
     _ = @import("graph.zig");
     _ = @import("parser.zig");
     _ = @import("pipeline.zig");
+    _ = @import("recipe.zig");
     _ = @import("templates.zig");
 }

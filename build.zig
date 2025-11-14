@@ -48,7 +48,13 @@ pub fn build(b: *std.Build) !void {
         .target = target,
         .optimize = optimize,
     });
-    _ = recipes_mod; // Keep reference to ensure it's available to dependencies
+    // Test recipes module
+    const run_recipes_tests = b.addTest(.{
+        .root_module = recipes_mod,
+    });
+
+    const run_recipes_test = b.addRunArtifact(run_recipes_tests);
+    test_step.dependOn(&run_recipes_test.step);
 
     // Generate example pipelines
     const examples_step = b.step("examples", "Generate example pipelines");
