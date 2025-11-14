@@ -203,6 +203,30 @@ pub const ParallelStepExecution = struct {
 pub const step_header =
     \\const std = @import("std");
     \\
+    \\// Condition helper functions
+    \\fn checkEnvEquals(variable: []const u8, value: []const u8) bool {
+    \\    const env_value = std.process.getEnvVarOwned(std.heap.page_allocator, variable) catch |err| {
+    \\        if (err == error.EnvironmentVariableNotFound) return false;
+    \\        return false;
+    \\    };
+    \\    defer std.heap.page_allocator.free(env_value);
+    \\    return std.mem.eql(u8, env_value, value);
+    \\}
+    \\
+    \\fn checkEnvExists(variable: []const u8) bool {
+    \\    const env_value = std.process.getEnvVarOwned(std.heap.page_allocator, variable) catch |err| {
+    \\        if (err == error.EnvironmentVariableNotFound) return false;
+    \\        return false;
+    \\    };
+    \\    std.heap.page_allocator.free(env_value);
+    \\    return true;
+    \\}
+    \\
+    \\fn checkFileExists(path: []const u8) bool {
+    \\    std.fs.cwd().access(path, .{}) catch return false;
+    \\    return true;
+    \\}
+    \\
     \\pub fn execute(allocator: std.mem.Allocator, log_path: []const u8) !void {
     \\    // Create log file for step output
     \\    const log_file = try std.fs.cwd().createFile(log_path, .{});

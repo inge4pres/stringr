@@ -1,4 +1,5 @@
 const std = @import("std");
+const condition = @import("condition.zig");
 
 /// Represents a complete CI pipeline
 pub const Pipeline = struct {
@@ -35,6 +36,7 @@ pub const Step = struct {
     action: Action,
     depends_on: [][]const u8, // IDs of steps this depends on
     env: std.StringHashMap([]const u8), // Environment variables for this step
+    condition: ?condition.Condition = null, // Optional condition for conditional execution
 
     pub fn deinit(self: Step, allocator: std.mem.Allocator) void {
         allocator.free(self.id);
@@ -52,6 +54,10 @@ pub const Step = struct {
         }
         var env_copy = self.env;
         env_copy.deinit();
+
+        if (self.condition) |cond| {
+            cond.deinit(allocator);
+        }
     }
 };
 
@@ -184,6 +190,7 @@ test "pipeline creation" {
         },
         .depends_on = &.{},
         .env = env,
+        .condition = null,
     };
 
     const pipe = Pipeline{

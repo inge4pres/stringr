@@ -14,6 +14,27 @@ fn sanitizeIdentifier(allocator: std.mem.Allocator, id: []const u8) ![]const u8 
     return result;
 }
 
+/// Add indentation to each line of a string
+fn indentLines(allocator: std.mem.Allocator, text: []const u8, indent: []const u8) ![]const u8 {
+    if (indent.len == 0) return try allocator.dupe(u8, text);
+
+    var result = std.ArrayList(u8).init(allocator);
+    defer result.deinit();
+
+    var lines = std.mem.splitScalar(u8, text, '\n');
+    var first = true;
+    while (lines.next()) |line| {
+        if (!first) try result.appendSlice("\n");
+        first = false;
+        if (line.len > 0) {
+            try result.appendSlice(indent);
+        }
+        try result.appendSlice(line);
+    }
+
+    return result.toOwnedSlice();
+}
+
 /// Generate all files needed for the pipeline executable
 pub fn generate(
     allocator: std.mem.Allocator,
@@ -238,6 +259,20 @@ fn generateStepFiles(allocator: std.mem.Allocator, pipe: pipeline.Pipeline, outp
 
 fn generateStepImplementation(writer: *std.Io.Writer, step: pipeline.Step, global_env: ?std.StringHashMap([]const u8)) !void {
     try writer.writeAll(templates.step_header);
+
+    // If there's a condition, add check at the start
+    if (step.condition) |cond| {
+        const cond_code = try cond.generateCode(std.heap.page_allocator);
+        defer std.heap.page_allocator.free(cond_code);
+
+        try writer.print("    // Conditional execution\n", .{});
+        try writer.print("    const should_execute = {s};\n", .{cond_code});
+        try writer.writeAll("    if (!should_execute) {\n");
+        try writer.writeAll("        try stdout.print(\"Condition not met, skipping step\\n\", .{});\n");
+        try writer.writeAll("        return;\n");
+        try writer.writeAll("    }\n");
+        try writer.writeAll("    try stdout.print(\"Condition met, executing step\\n\", .{});\n\n");
+    }
 
     // Determine if this action type supports environment variables
     const action_supports_env = switch (step.action) {

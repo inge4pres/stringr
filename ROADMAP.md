@@ -37,18 +37,30 @@ The core compiler reads pipeline definitions and generates Zig code that compile
   - Merging of global and step-specific environment variables
   - Step-specific variables override global ones
   - CLI `--env-file` option for loading environment files
-- ✅ Example pipelines (hello-world, simple-pipeline, parallel-pipeline, env-test)
+- ✅ **Recipe system (VTable pattern)**
+  - Extensible action type system with interface pattern
+  - Docker recipe for container execution
+  - Cache recipe for artifact save/restore
+  - HTTP recipe for webhooks and API calls
+  - Slack recipe for notifications
+- ✅ **Generated pipeline portability and dependency management**
+  - Pre-calculated fingerprint using Zig's algorithm (random ID + CRC32)
+  - No post-generation fixing required - pipelines build on first try
+  - Remote dependency fetching from GitHub with commit-pinned URLs
+  - Proper module export configuration with target/optimize parameters
+  - Self-contained generated pipelines
+- ✅ Example pipelines (hello-world, simple-pipeline, parallel-pipeline, env-test, docker-recipe-test, all-recipes-test)
 
 **Remaining Work:**
-- [ ] Advanced action types (docker, cache, notifications)
 - [ ] Pipeline variables and parameter substitution
 - [ ] Conditional step execution
 - [ ] Step retry mechanisms
 - [ ] Comprehensive testing suite
 - [ ] CLI improvements (verbose mode, dry-run, validation command)
-- [ ] More example pipelines
+- [ ] More example pipelines demonstrating real-world scenarios
 - [ ] Performance optimizations
 - [ ] Secret management integration (separate from plain environment variables)
+- [ ] More recipe types (database operations, cloud provider integrations, container registries)
 
 ### Technical Details
 
@@ -64,12 +76,15 @@ Dependency Analysis (graph.zig) - computes execution levels
     ↓
 Code Generator (codegen.zig) - generates parallel execution code
     ↓
+Templates (templates.zig) - generates build.zig.zon with fingerprint
+    ↓
 Generated Files:
-  - build.zig (orchestration)
+  - build.zig.zon (with pre-calculated fingerprint and dependencies)
+  - build.zig (orchestration with b.dependency() for recipes)
   - src/main.zig (pipeline entry point with parallel execution)
   - src/step_*.zig (individual step implementations)
     ↓
- zig build
+ zig build (fetches dependencies from GitHub, builds immediately)
     ↓
 Standalone Pipeline Executable (with parallelism built-in)
 ```
@@ -84,6 +99,9 @@ Standalone Pipeline Executable (with parallelism built-in)
 - **Comprehensive validation** - catch errors before execution
 - **Fast execution** - compiled code with minimal overhead
 - **Debuggable output** - log files preserved for inspection and debugging
+- **Pre-calculated fingerprints** - generated pipelines build successfully on first attempt
+- **Remote dependency management** - fetch recipe module from GitHub with commit-pinned URLs
+- **Extensible recipe system** - easy to add new action types via VTable pattern
 
 ---
 

@@ -43,8 +43,3 @@ pub const Recipe = struct {
     }
 };
 
-test "recipe interface" {
-    const testing = std.testing;
-    _ = testing;
-    // Interface structure tests
-}

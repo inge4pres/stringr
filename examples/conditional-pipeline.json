@@ -1,0 +1,76 @@
+{
+  "name": "conditional-test-pipeline",
+  "description": "A pipeline demonstrating conditional step execution",
+  "steps": [
+    {
+      "id": "always-run",
+      "name": "Always Run",
+      "action": {
+        "type": "shell",
+        "command": "echo 'This step always runs'"
+      }
+    },
+    {
+      "id": "never-run",
+      "name": "Never Run",
+      "condition": {
+        "type": "never"
+      },
+      "action": {
+        "type": "shell",
+        "command": "echo 'This should never execute'"
+      }
+    },
+    {
+      "id": "check-env-production",
+      "name": "Production Only",
+      "condition": {
+        "type": "env_equals",
+        "variable": "ENVIRONMENT",
+        "value": "production"
+      },
+      "action": {
+        "type": "shell",
+        "command": "echo 'Deploying to production'"
+      },
+      "env": {
+        "DEPLOYMENT_TARGET": "prod.example.com"
+      }
+    },
+    {
+      "id": "check-ci-exists",
+      "name": "CI Environment Check",
+      "depends_on": ["always-run"],
+      "condition": {
+        "type": "env_exists",
+        "variable": "CI"
+      },
+      "action": {
+        "type": "shell",
+        "command": "echo 'Running in CI environment'"
+      }
+    },
+    {
+      "id": "check-file-exists",
+      "name": "Git Repository Check",
+      "depends_on": ["always-run"],
+      "condition": {
+        "type": "file_exists",
+        "path": ".git"
+      },
+      "action": {
+        "type": "shell",
+        "command": "echo 'This is a git repository'"
+      }
+    },
+    {
+      "id": "final-step",
+      "name": "Final Step",
+      "depends_on": ["check-env-production", "check-ci-exists", "check-file-exists"],
+      "action": {
+        "type": "shell",
+        "command": "echo 'Pipeline completed'"
+      }
+    }
+  ]
+}

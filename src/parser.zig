@@ -1,5 +1,6 @@
 const std = @import("std");
 const pipeline = @import("pipeline.zig");
+const condition = @import("condition.zig");
 
 /// Validation errors with context
 pub const ParseError = error{
@@ -43,6 +44,7 @@ const Step = struct {
     action: Action,
     depends_on: ?[][]const u8 = null,
     env: ?std.json.Value = null,
+    condition: ?std.json.Value = null,
 };
 
 /// Pipeline schema describes the overall pipeline structure
@@ -223,13 +225,104 @@ fn parseStepFromJson(allocator: std.mem.Allocator, step_json: Step, step_index: 
     // Parse action
     const action = try parseActionFromJson(allocator, step_json.action, id);
 
+    // Parse condition (optional)
+    const cond = if (step_json.condition) |cond_json|
+        try parseConditionFromJson(allocator, cond_json, id)
+    else
+        null;
+
     return pipeline.Step{
         .id = id,
         .name = name,
         .action = action,
         .depends_on = depends_on,
         .env = env,
+        .condition = cond,
     };
+}
+
+fn parseConditionFromJson(allocator: std.mem.Allocator, cond_json: std.json.Value, step_id: []const u8) ParseError!condition.Condition {
+    if (cond_json != .object) {
+        std.debug.print("Error: Field 'condition' must be an object in step '{s}'\n", .{step_id});
+        return ParseError.InvalidFieldValue;
+    }
+
+    const cond_obj = cond_json.object;
+    const cond_type = cond_obj.get("type") orelse {
+        std.debug.print("Error: Missing required field 'type' in condition for step '{s}'\n", .{step_id});
+        return ParseError.MissingField;
+    };
+
+    if (cond_type != .string) {
+        std.debug.print("Error: Field 'type' must be a string in condition for step '{s}'\n", .{step_id});
+        return ParseError.InvalidFieldValue;
+    }
+
+    const type_str = cond_type.string;
+
+    if (std.mem.eql(u8, type_str, "always")) {
+        return condition.Condition{ .always = {} };
+    } else if (std.mem.eql(u8, type_str, "never")) {
+        return condition.Condition{ .never = {} };
+    } else if (std.mem.eql(u8, type_str, "env_equals")) {
+        const variable = cond_obj.get("variable") orelse {
+            std.debug.print("Error: Missing required field 'variable' for env_equals condition in step '{s}'\n", .{step_id});
+            return ParseError.MissingField;
+        };
+        if (variable != .string) {
+            std.debug.print("Error: Field 'variable' must be a string in env_equals condition for step '{s}'\n", .{step_id});
+            return ParseError.InvalidFieldValue;
+        }
+
+        const value = cond_obj.get("value") orelse {
+            std.debug.print("Error: Missing required field 'value' for env_equals condition in step '{s}'\n", .{step_id});
+            return ParseError.MissingField;
+        };
+        if (value != .string) {
+            std.debug.print("Error: Field 'value' must be a string in env_equals condition for step '{s}'\n", .{step_id});
+            return ParseError.InvalidFieldValue;
+        }
+
+        return condition.Condition{
+            .env_equals = .{
+                .variable = try allocator.dupe(u8, variable.string),
+                .value = try allocator.dupe(u8, value.string),
+            }
+        };
+    } else if (std.mem.eql(u8, type_str, "env_exists")) {
+        const variable = cond_obj.get("variable") orelse {
+            std.debug.print("Error: Missing required field 'variable' for env_exists condition in step '{s}'\n", .{step_id});
+            return ParseError.MissingField;
+        };
+        if (variable != .string) {
+            std.debug.print("Error: Field 'variable' must be a string in env_exists condition for step '{s}'\n", .{step_id});
+            return ParseError.InvalidFieldValue;
+        }
+
+        return condition.Condition{
+            .env_exists = .{
+                .variable = try allocator.dupe(u8, variable.string),
+            }
+        };
+    } else if (std.mem.eql(u8, type_str, "file_exists")) {
+        const path = cond_obj.get("path") orelse {
+            std.debug.print("Error: Missing required field 'path' for file_exists condition in step '{s}'\n", .{step_id});
+            return ParseError.MissingField;
+        };
+        if (path != .string) {
+            std.debug.print("Error: Field 'path' must be a string in file_exists condition for step '{s}'\n", .{step_id});
+            return ParseError.InvalidFieldValue;
+        }
+
+        return condition.Condition{
+            .file_exists = .{
+                .path = try allocator.dupe(u8, path.string),
+            }
+        };
+    } else {
+        std.debug.print("Error: Unknown condition type '{s}' in step '{s}'. Must be: always, never, env_equals, env_exists, or file_exists\n", .{ type_str, step_id });
+        return ParseError.InvalidFieldValue;
+    }
 }
 
 fn parseActionFromJson(allocator: std.mem.Allocator, action_json: Action, step_id: []const u8) ParseError!pipeline.Action {
@@ -499,6 +592,61 @@ test "parse pipeline with environment variables" {
     try testing.expectEqual(@as(usize, 2), pipe.steps[0].env.count());
     try testing.expectEqualStrings("value1", pipe.steps[0].env.get("VAR1").?);
     try testing.expectEqualStrings("value2", pipe.steps[0].env.get("VAR2").?);
+}
+
+test "parse pipeline with conditions" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const json =
+        \\{
+        \\  "name": "conditional-test",
+        \\  "description": "Test conditions",
+        \\  "steps": [
+        \\    {
+        \\      "id": "env-check",
+        \\      "name": "Environment Check",
+        \\      "action": {
+        \\        "type": "shell",
+        \\        "command": "echo test"
+        \\      },
+        \\      "condition": {
+        \\        "type": "env_equals",
+        \\        "variable": "BUILD_ENV",
+        \\        "value": "production"
+        \\      }
+        \\    },
+        \\    {
+        \\      "id": "file-check",
+        \\      "name": "File Check",
+        \\      "action": {
+        \\        "type": "shell",
+        \\        "command": "echo test"
+        \\      },
+        \\      "condition": {
+        \\        "type": "file_exists",
+        \\        "path": ".git"
+        \\      }
+        \\    }
+        \\  ]
+        \\}
+    ;
+
+    const pipe = try parseDefinition(allocator, json);
+    defer pipe.deinit(allocator);
+
+    try testing.expectEqual(@as(usize, 2), pipe.steps.len);
+
+    // Check first step has env_equals condition
+    try testing.expect(pipe.steps[0].condition != null);
+    try testing.expect(pipe.steps[0].condition.? == .env_equals);
+    try testing.expectEqualStrings("BUILD_ENV", pipe.steps[0].condition.?.env_equals.variable);
+    try testing.expectEqualStrings("production", pipe.steps[0].condition.?.env_equals.value);
+
+    // Check second step has file_exists condition
+    try testing.expect(pipe.steps[1].condition != null);
+    try testing.expect(pipe.steps[1].condition.? == .file_exists);
+    try testing.expectEqualStrings(".git", pipe.steps[1].condition.?.file_exists.path);
 }
 
 test "parse all action types" {
