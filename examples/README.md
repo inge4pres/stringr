@@ -54,11 +54,7 @@ Demonstrates parallel execution with multiple steps running concurrently.
 ## Adding New Examples
 
 1. Create a new `.json` file in this directory
-2. Add it to the `example_definitions` array in `build.zig`:
-   ```zig
-   .{ .json = "examples/your-example.json", .output = "examples/_generated/your-example" },
-   ```
-3. Run `zig build examples` to generate it
+2. Run `zig build examples` to generate it
 
 ## Notes
 
